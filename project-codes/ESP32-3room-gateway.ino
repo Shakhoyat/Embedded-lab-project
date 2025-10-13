@@ -20,8 +20,8 @@ const char* WIFI_SSID = "YOUR_WIFI_SSID";        // Replace with your WiFi name
 const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD"; // Replace with your WiFi password
 
 // ========== FIREBASE CONFIGURATION ==========
-#define FIREBASE_HOST "your-project-name.firebaseio.com"  // Replace with your Firebase project
-#define FIREBASE_AUTH "your-database-secret-key"          // Replace with your database secret
+#define FIREBASE_HOST "smart-building-monitoring-iot.firebaseio.com"  // Replace with your Firebase project
+#define FIREBASE_AUTH "wMpzysAkHQ2DnAUe9uoT8Y7YrmV3B6WUe5VHSYIE"          // Replace with your database secret
 
 // ========== PIN DEFINITIONS ==========
 #define STATUS_LED 2      // Built-in LED for connection status
