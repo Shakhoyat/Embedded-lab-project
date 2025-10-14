@@ -46,7 +46,7 @@
 // Buzzers
 #define BUZZER_BEDROOM 27
 #define BUZZER_KITCHEN 28
-#define BUZZER_PARKING 29
+#define BUZZER_PARKING 3
 
 // LEDs - Green (Safe)
 #define LED_GREEN_BEDROOM 30
@@ -276,9 +276,9 @@ void controlAlertsAndLEDs() {
     digitalWrite(LED_GREEN_PARKING, HIGH);
   }
   if (parking.isEmergency) {
-    tone(BUZZER_PARKING, 2000, 500);
+    digitalWrite(BUZZER_PARKING, HIGH);
   } else {
-    noTone(BUZZER_PARKING);
+    digitalWrite(BUZZER_PARKING, LOW);
   }
 }
 
