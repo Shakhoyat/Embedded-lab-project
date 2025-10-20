@@ -1,67 +1,47 @@
 /*
  * Smart Building Monitoring System - Arduino Mega Code
- * 3 Rooms: Bedroom, Kitchen, Parking Lot
+ * 4 Segments: Kitchen, Bedroom, Parking, Central Gas Chamber
  * 
- * Sensors:
- * - DHT11 x1 (General temperature/humidity)
- * - DS18B20 x1 (Precision temperature monitoring)
- * - Flame Sensor x3 (One per room)
- * - MQ2 x3 (Smoke/Gas detection per room)
- * - MQ135 x1 (Air quality monitoring)
+ * Kitchen: MQ135 sensor, DHT11, Flame Sensor, Buzzer, Red+Green LED
+ * Bedroom: DS18B20, MQ2, Flame Sensor, Buzzer, Red+Green LED  
+ * Parking: MQ2, Flame Sensor, Red+Green LED
+ * Central Gas Chamber: MQ2, Buzzer
  * 
- * Components:
- * - Buzzer x3 (One per room for alerts)
- * - LEDs x6 (3 Green + 3 Red for room status)
- * - LCD Display (System status)
+ * Data sent to ESP32 for Firebase integration and emergency alerts
  */
 
 #include <DHT.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
-#include <LiquidCrystal_I2C.h>
-#include <Wire.h>
 #include <ArduinoJson.h>
 
 // ========== PIN DEFINITIONS ==========
-// DHT11 Sensor
-#define DHT_PIN 22
+// Kitchen Sensors
+#define DHT_PIN 22            // DHT11 for temperature/humidity
 #define DHT_TYPE DHT11
+#define MQ135_PIN A3          // Air quality sensor
+#define FLAME_KITCHEN 25      // Flame sensor
+#define BUZZER_KITCHEN 28     // Kitchen buzzer
+#define LED_GREEN_KITCHEN 31  // Kitchen safe indicator
+#define LED_RED_KITCHEN 34    // Kitchen danger indicator
 
-// DS18B20 Temperature Sensor
-#define ONE_WIRE_BUS 23
+// Bedroom Sensors  
+#define ONE_WIRE_BUS 23       // DS18B20 temperature sensor
+#define MQ2_BEDROOM A0        // Gas/smoke sensor
+#define FLAME_BEDROOM 24      // Flame sensor
+#define BUZZER_BEDROOM 27     // Bedroom buzzer
+#define LED_GREEN_BEDROOM 30  // Bedroom safe indicator
+#define LED_RED_BEDROOM 33    // Bedroom danger indicator
 
-// Flame Sensors (Digital pins)
-#define FLAME_BEDROOM 24
-#define FLAME_KITCHEN 25
-#define FLAME_PARKING 26
+// Parking Sensors
+#define MQ2_PARKING A2        // Gas/smoke sensor
+#define FLAME_PARKING 26      // Flame sensor
+#define LED_GREEN_PARKING 32  // Parking safe indicator
+#define LED_RED_PARKING 35    // Parking danger indicator
 
-// MQ2 Gas Sensors (Analog pins)
-#define MQ2_BEDROOM A0
-#define MQ2_KITCHEN A1
-#define MQ2_PARKING A2
-
-// MQ135 Air Quality Sensor
-#define MQ135_PIN A3
-
-// Buzzers
-#define BUZZER_BEDROOM 27
-#define BUZZER_KITCHEN 28
-#define BUZZER_PARKING 3
-
-// LEDs - Green (Safe)
-#define LED_GREEN_BEDROOM 30
-#define LED_GREEN_KITCHEN 31
-#define LED_GREEN_PARKING 32
-
-// LEDs - Red (Danger)
-#define LED_RED_BEDROOM 33
-#define LED_RED_KITCHEN 34
-#define LED_RED_PARKING 35
-
-// LCD Display (I2C)
-#define LCD_ADDRESS 0x27
-#define LCD_COLS 16
-#define LCD_ROWS 2
+// Central Gas Chamber
+#define MQ2_CENTRAL A1        // Central gas monitoring
+#define BUZZER_CENTRAL 29     // Central chamber buzzer
 
 // ========== SENSOR THRESHOLDS ==========
 #define MQ2_THRESHOLD 300      // Gas/Smoke threshold (analog)
@@ -69,205 +49,261 @@
 #define TEMP_THRESHOLD_HIGH 35 // High temperature alert (°C)
 #define TEMP_THRESHOLD_LOW 10  // Low temperature alert (°C)
 #define HUMIDITY_HIGH 70       // High humidity alert (%)
+#define HUMIDITY_LOW 30        // Low humidity alert (%)
+
+// Critical thresholds for immediate emergency
+#define MQ2_CRITICAL 500       // Critical gas level
+#define MQ135_CRITICAL 600     // Critical air quality
+#define TEMP_CRITICAL 45       // Critical temperature
 
 // ========== SENSOR OBJECTS ==========
 DHT dht(DHT_PIN, DHT_TYPE);
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature ds18b20(&oneWire);
-LiquidCrystal_I2C lcd(LCD_ADDRESS, LCD_COLS, LCD_ROWS);
 
-// ========== ROOM STATUS STRUCTURE ==========
-struct RoomData {
-  const char* roomName;
+// ========== SEGMENT STATUS STRUCTURE ==========
+struct SegmentData {
+  const char* segmentName;
   bool flameDetected;
   int gasLevel;
-  bool isEmergency;
-  bool isDangerous;
+  float temperature;        // Individual temperature readings
+  float humidity;          // For kitchen only (DHT11)
+  int airQuality;          // For kitchen only (MQ135)
+  bool isEmergency;        // Fire or critical conditions
+  bool isDangerous;        // Warning conditions
+  bool hasBuzzer;          // Does this segment have buzzer
+  bool hasLEDs;            // Does this segment have LED indicators
+  unsigned long lastAlert; // Last alert time for debouncing
 };
 
-RoomData bedroom = {"Bedroom", false, 0, false, false};
-RoomData kitchen = {"Kitchen", false, 0, false, false};
-RoomData parking = {"Parking", false, 0, false, false};
+SegmentData kitchen = {"Kitchen", false, 0, 0, 0, 0, false, false, true, true, 0};
+SegmentData bedroom = {"Bedroom", false, 0, 0, 0, 0, false, false, true, true, 0};
+SegmentData parking = {"Parking", false, 0, 0, 0, 0, false, false, false, true, 0};
+SegmentData centralGas = {"Central_Gas", false, 0, 0, 0, 0, false, false, true, false, 0};
 
 // ========== GLOBAL VARIABLES ==========
-float temperature = 0;
-float humidity = 0;
-float preciseTemp = 0;
-int airQuality = 0;
+float globalTemperature = 0;   // Average/general temperature
+float globalHumidity = 0;      // Kitchen humidity (DHT11)
 unsigned long lastSensorRead = 0;
-unsigned long lastDisplayUpdate = 0;
 unsigned long lastDataSend = 0;
-int currentRoom = 0; // For LCD display cycling
 int dataSendCount = 0;
+bool systemEmergency = false;
+unsigned long emergencyStartTime = 0;
 
-const unsigned long SENSOR_INTERVAL = 2000;
-const unsigned long DISPLAY_INTERVAL = 3000;
-const unsigned long SEND_INTERVAL = 5000;
+const unsigned long SENSOR_INTERVAL = 1000;  // Read sensors every 1 second
+const unsigned long SEND_INTERVAL = 3000;    // Send data every 3 seconds
+const unsigned long ALERT_DEBOUNCE = 5000;   // 5 second debounce for alerts
 
 void setup() {
   Serial.begin(115200);
   Serial.println("=== SMART BUILDING MONITORING SYSTEM ===");
+  Serial.println("4 Segments: Kitchen, Bedroom, Parking, Central Gas Chamber");
+  Serial.println("LCD Display connected to ESP32 for data visualization");
   Serial.println("Initializing sensors and components...");
   
   // Initialize sensors
   dht.begin();
   ds18b20.begin();
   
-  // Initialize LCD
-  lcd.init();
-  lcd.backlight();
-  lcd.setCursor(0, 0);
-  lcd.print("Smart Building");
-  lcd.setCursor(0, 1);
-  lcd.print("Initializing...");
-  
   // Initialize flame sensor pins
-  pinMode(FLAME_BEDROOM, INPUT);
   pinMode(FLAME_KITCHEN, INPUT);
+  pinMode(FLAME_BEDROOM, INPUT);
   pinMode(FLAME_PARKING, INPUT);
   
   // Initialize buzzer pins
-  pinMode(BUZZER_BEDROOM, OUTPUT);
   pinMode(BUZZER_KITCHEN, OUTPUT);
-  pinMode(BUZZER_PARKING, OUTPUT);
+  pinMode(BUZZER_BEDROOM, OUTPUT);
+  pinMode(BUZZER_CENTRAL, OUTPUT);
   
   // Initialize LED pins
-  pinMode(LED_GREEN_BEDROOM, OUTPUT);
   pinMode(LED_GREEN_KITCHEN, OUTPUT);
+  pinMode(LED_GREEN_BEDROOM, OUTPUT);
   pinMode(LED_GREEN_PARKING, OUTPUT);
-  pinMode(LED_RED_BEDROOM, OUTPUT);
   pinMode(LED_RED_KITCHEN, OUTPUT);
+  pinMode(LED_RED_BEDROOM, OUTPUT);
   pinMode(LED_RED_PARKING, OUTPUT);
   
-  // Turn on all green LEDs initially (safe state)
-  digitalWrite(LED_GREEN_BEDROOM, HIGH);
+  // Set initial safe state - all green LEDs on, red LEDs off
   digitalWrite(LED_GREEN_KITCHEN, HIGH);
+  digitalWrite(LED_GREEN_BEDROOM, HIGH);
   digitalWrite(LED_GREEN_PARKING, HIGH);
-  
-  // Turn off all red LEDs and buzzers
-  digitalWrite(LED_RED_BEDROOM, LOW);
   digitalWrite(LED_RED_KITCHEN, LOW);
+  digitalWrite(LED_RED_BEDROOM, LOW);
   digitalWrite(LED_RED_PARKING, LOW);
-  digitalWrite(BUZZER_BEDROOM, LOW);
+  
+  // Turn off all buzzers initially
   digitalWrite(BUZZER_KITCHEN, LOW);
-  digitalWrite(BUZZER_PARKING, LOW);
+  digitalWrite(BUZZER_BEDROOM, LOW);
+  digitalWrite(BUZZER_CENTRAL, LOW);
   
-  delay(1500);
-  lcd.clear();
-  lcd.setCursor(0,0);
-  lcd.print("System Ready");
-  lcd.setCursor(0,1);
-  lcd.print("Monitoring...");
-  delay(1000);
-  
+  delay(2000);
   Serial.println("System initialized successfully!");
-  Serial.println("Monitoring 3 rooms: Bedroom, Kitchen, Parking Lot");
+  Serial.println("Monitoring segments:");
+  Serial.println("- Kitchen: DHT11, MQ135, Flame, Buzzer, LEDs");
+  Serial.println("- Bedroom: DS18B20, MQ2, Flame, Buzzer, LEDs");
+  Serial.println("- Parking: MQ2, Flame, LEDs");
+  Serial.println("- Central Gas: MQ2, Buzzer");
+  Serial.println("Data will be sent to ESP32 for LCD display and Firebase integration");
   Serial.println("=====================================");
 }
 
 void loop() {
   unsigned long currentTime = millis();
   
+  // Read all sensors at regular intervals
   if (currentTime - lastSensorRead >= SENSOR_INTERVAL) {
     lastSensorRead = currentTime;
     readAllSensors();
-    analyzeRoomSafety();
+    analyzeSegmentSafety();
     controlAlertsAndLEDs();
   }
   
-  if (currentTime - lastDisplayUpdate >= DISPLAY_INTERVAL) {
-    lastDisplayUpdate = currentTime;
-    updateLCDDisplay();
-    currentRoom = (currentRoom + 1) % 4; // 0: env, 1: bedroom, 2: kitchen, 3: parking
-  }
-  
+  // Send comprehensive data to ESP32 (includes LCD display data)
   if (currentTime - lastDataSend >= SEND_INTERVAL) {
     lastDataSend = currentTime;
     sendDataToESP32();
     printSystemStatus();
   }
+  
+  // Handle system-wide emergency state
+  handleSystemEmergency();
 }
 
-// ====== Read sensors ======
+// ====== Read all sensors from all segments ======
 void readAllSensors() {
-  // Read DHT11 (Temperature and Humidity)
+  // Kitchen: DHT11 (Temperature and Humidity) + MQ135 (Air Quality)
   float h = dht.readHumidity();
   float t = dht.readTemperature();
-  if (!isnan(h)) humidity = h;
-  if (!isnan(t)) temperature = t;
+  if (!isnan(h)) {
+    kitchen.humidity = h;
+    globalHumidity = h; // Kitchen is our reference for humidity
+  }
+  if (!isnan(t)) {
+    kitchen.temperature = t;
+    globalTemperature = t; // Kitchen temperature as global reference
+  }
+  kitchen.airQuality = analogRead(MQ135_PIN);
+  kitchen.flameDetected = (digitalRead(FLAME_KITCHEN) == LOW);
+  // Kitchen doesn't have MQ2, using MQ135 as gas level reference
+  kitchen.gasLevel = kitchen.airQuality;
   
-  // Read DS18B20 (Precise Temperature)
+  // Bedroom: DS18B20 (Precise Temperature) + MQ2 (Gas)
   ds18b20.requestTemperatures();
   float dsTemp = ds18b20.getTempCByIndex(0);
-  if (dsTemp != DEVICE_DISCONNECTED_C) preciseTemp = dsTemp;
-  
-  // Read Flame Sensors (many modules output LOW when flame detected)
-  bedroom.flameDetected = (digitalRead(FLAME_BEDROOM) == LOW);
-  kitchen.flameDetected = (digitalRead(FLAME_KITCHEN) == LOW);
-  parking.flameDetected = (digitalRead(FLAME_PARKING) == LOW);
-  
-  // Read MQ2 Gas Sensors
+  if (dsTemp != DEVICE_DISCONNECTED_C) {
+    bedroom.temperature = dsTemp;
+  }
   bedroom.gasLevel = analogRead(MQ2_BEDROOM);
-  kitchen.gasLevel = analogRead(MQ2_KITCHEN);
-  parking.gasLevel = analogRead(MQ2_PARKING);
+  bedroom.flameDetected = (digitalRead(FLAME_BEDROOM) == LOW);
+  // No humidity/air quality sensors in bedroom
+  bedroom.humidity = 0;
+  bedroom.airQuality = 0;
   
-  // Read MQ135 Air Quality
-  airQuality = analogRead(MQ135_PIN);
+  // Parking: MQ2 (Gas) + Flame
+  parking.gasLevel = analogRead(MQ2_PARKING);
+  parking.flameDetected = (digitalRead(FLAME_PARKING) == LOW);
+  // Use global temperature as reference for parking
+  parking.temperature = globalTemperature;
+  parking.humidity = 0;
+  parking.airQuality = 0;
+  
+  // Central Gas Chamber: MQ2 (Gas monitoring)
+  centralGas.gasLevel = analogRead(MQ2_CENTRAL);
+  centralGas.flameDetected = false; // No flame sensor in central chamber
+  centralGas.temperature = globalTemperature; // Reference temperature
+  centralGas.humidity = 0;
+  centralGas.airQuality = 0;
 }
 
-// ====== Analyze safety for each room ======
-void analyzeRoomSafety() {
-  // Bedroom
-  bedroom.isEmergency = bedroom.flameDetected;
-  bedroom.isDangerous = bedroom.isEmergency ||
-                         (bedroom.gasLevel > MQ2_THRESHOLD) ||
-                         (temperature > TEMP_THRESHOLD_HIGH) ||
-                         (airQuality > MQ135_THRESHOLD);
-  // Kitchen
-  kitchen.isEmergency = kitchen.flameDetected;
+// ====== Analyze safety conditions for each segment ======
+void analyzeSegmentSafety() {
+  unsigned long currentTime = millis();
+  
+  // Kitchen Analysis
+  kitchen.isEmergency = kitchen.flameDetected || 
+                       (kitchen.temperature > TEMP_CRITICAL) ||
+                       (kitchen.airQuality > MQ135_CRITICAL);
+                       
   kitchen.isDangerous = kitchen.isEmergency ||
-                         (kitchen.gasLevel > MQ2_THRESHOLD) ||
-                         (temperature > TEMP_THRESHOLD_HIGH) ||
-                         (airQuality > MQ135_THRESHOLD);
-  // Parking
-  parking.isEmergency = parking.flameDetected;
+                       (kitchen.temperature > TEMP_THRESHOLD_HIGH) ||
+                       (kitchen.humidity > HUMIDITY_HIGH) ||
+                       (kitchen.humidity < HUMIDITY_LOW) ||
+                       (kitchen.airQuality > MQ135_THRESHOLD);
+  
+  // Bedroom Analysis  
+  bedroom.isEmergency = bedroom.flameDetected ||
+                       (bedroom.temperature > TEMP_CRITICAL) ||
+                       (bedroom.gasLevel > MQ2_CRITICAL);
+                       
+  bedroom.isDangerous = bedroom.isEmergency ||
+                       (bedroom.temperature > TEMP_THRESHOLD_HIGH) ||
+                       (bedroom.temperature < TEMP_THRESHOLD_LOW) ||
+                       (bedroom.gasLevel > MQ2_THRESHOLD);
+  
+  // Parking Analysis
+  parking.isEmergency = parking.flameDetected ||
+                       (parking.gasLevel > MQ2_CRITICAL);
+                       
   parking.isDangerous = parking.isEmergency ||
-                         (parking.gasLevel > MQ2_THRESHOLD) ||
-                         (temperature > TEMP_THRESHOLD_HIGH) ||
-                         (airQuality > MQ135_THRESHOLD);
+                       (parking.gasLevel > MQ2_THRESHOLD);
+  
+  // Central Gas Chamber Analysis (Most critical for gas monitoring)
+  centralGas.isEmergency = (centralGas.gasLevel > MQ2_CRITICAL);
+  centralGas.isDangerous = centralGas.isEmergency ||
+                          (centralGas.gasLevel > MQ2_THRESHOLD);
+  
+  // Update system emergency state
+  systemEmergency = kitchen.isEmergency || bedroom.isEmergency || 
+                   parking.isEmergency || centralGas.isEmergency;
+  
+  if (systemEmergency && emergencyStartTime == 0) {
+    emergencyStartTime = currentTime;
+  } else if (!systemEmergency) {
+    emergencyStartTime = 0;
+  }
 }
 
-// ====== Control buzzers and LEDs ======
+// ====== Control buzzers and LEDs for all segments ======
 void controlAlertsAndLEDs() {
-  // Bedroom LEDs / buzzer
-  if (bedroom.isDangerous) {
-    digitalWrite(LED_RED_BEDROOM, HIGH);
-    digitalWrite(LED_GREEN_BEDROOM, LOW);
-  } else {
-    digitalWrite(LED_RED_BEDROOM, LOW);
-    digitalWrite(LED_GREEN_BEDROOM, HIGH);
-  }
-  if (bedroom.isEmergency) {
-    tone(BUZZER_BEDROOM, 2000, 500);
-  } else {
-    noTone(BUZZER_BEDROOM);
-  }
-
-  // Kitchen LEDs / buzzer
+  unsigned long currentTime = millis();
+  
+  // Kitchen alerts and LEDs
   if (kitchen.isDangerous) {
     digitalWrite(LED_RED_KITCHEN, HIGH);
     digitalWrite(LED_GREEN_KITCHEN, LOW);
+    
+    if (kitchen.isEmergency && (currentTime - kitchen.lastAlert > ALERT_DEBOUNCE)) {
+      tone(BUZZER_KITCHEN, 2000, 500); // High pitch for emergency
+      kitchen.lastAlert = currentTime;
+    } else if (!kitchen.isEmergency && (currentTime - kitchen.lastAlert > ALERT_DEBOUNCE * 2)) {
+      tone(BUZZER_KITCHEN, 1000, 200); // Lower pitch for warning
+      kitchen.lastAlert = currentTime;
+    }
   } else {
     digitalWrite(LED_RED_KITCHEN, LOW);
     digitalWrite(LED_GREEN_KITCHEN, HIGH);
-  }
-  if (kitchen.isEmergency) {
-    tone(BUZZER_KITCHEN, 2000, 500);
-  } else {
     noTone(BUZZER_KITCHEN);
   }
-
-  // Parking LEDs / buzzer
+  
+  // Bedroom alerts and LEDs
+  if (bedroom.isDangerous) {
+    digitalWrite(LED_RED_BEDROOM, HIGH);
+    digitalWrite(LED_GREEN_BEDROOM, LOW);
+    
+    if (bedroom.isEmergency && (currentTime - bedroom.lastAlert > ALERT_DEBOUNCE)) {
+      tone(BUZZER_BEDROOM, 2200, 500); // Distinct pitch from kitchen
+      bedroom.lastAlert = currentTime;
+    } else if (!bedroom.isEmergency && (currentTime - bedroom.lastAlert > ALERT_DEBOUNCE * 2)) {
+      tone(BUZZER_BEDROOM, 1200, 200);
+      bedroom.lastAlert = currentTime;
+    }
+  } else {
+    digitalWrite(LED_RED_BEDROOM, LOW);
+    digitalWrite(LED_GREEN_BEDROOM, HIGH);
+    noTone(BUZZER_BEDROOM);
+  }
+  
+  // Parking LEDs (no buzzer)
   if (parking.isDangerous) {
     digitalWrite(LED_RED_PARKING, HIGH);
     digitalWrite(LED_GREEN_PARKING, LOW);
@@ -275,98 +311,160 @@ void controlAlertsAndLEDs() {
     digitalWrite(LED_RED_PARKING, LOW);
     digitalWrite(LED_GREEN_PARKING, HIGH);
   }
-  if (parking.isEmergency) {
-    digitalWrite(BUZZER_PARKING, HIGH);
+  
+  // Central Gas Chamber buzzer (no LEDs)
+  if (centralGas.isDangerous) {
+    if (centralGas.isEmergency && (currentTime - centralGas.lastAlert > ALERT_DEBOUNCE)) {
+      tone(BUZZER_CENTRAL, 2500, 700); // Highest pitch for gas emergency
+      centralGas.lastAlert = currentTime;
+    } else if (!centralGas.isEmergency && (currentTime - centralGas.lastAlert > ALERT_DEBOUNCE * 2)) {
+      tone(BUZZER_CENTRAL, 1500, 300);
+      centralGas.lastAlert = currentTime;
+    }
   } else {
-    digitalWrite(BUZZER_PARKING, LOW);
+    noTone(BUZZER_CENTRAL);
   }
 }
 
-// ====== LCD display cycling ======
-void updateLCDDisplay() {
-  lcd.clear();
-  switch (currentRoom) {
-    case 0: // Environmental summary
-      lcd.setCursor(0,0);
-      lcd.print("T:");
-      lcd.print(temperature,1);
-      lcd.print("C H:");
-      lcd.print(humidity,0);
-      lcd.setCursor(0,1);
-      lcd.print("AQ:");
-      lcd.print(map(airQuality,0,1023,0,500)); // rough scale
-      lcd.print(" DS:");
-      lcd.print(preciseTemp,1);
-      break;
-    case 1: // Bedroom
-      lcd.setCursor(0,0);
-      lcd.print("Bedroom:");
-      lcd.print(bedroom.flameDetected ? "FLAME" : (bedroom.isDangerous ? "DANGER" : "SAFE"));
-      lcd.setCursor(0,1);
-      lcd.print("G:");
-      lcd.print(bedroom.gasLevel);
-      break;
-    case 2: // Kitchen
-      lcd.setCursor(0,0);
-      lcd.print("Kitchen:");
-      lcd.print(kitchen.flameDetected ? "FLAME" : (kitchen.isDangerous ? "DANGER" : "SAFE"));
-      lcd.setCursor(0,1);
-      lcd.print("G:");
-      lcd.print(kitchen.gasLevel);
-      break;
-    case 3: // Parking
-      lcd.setCursor(0,0);
-      lcd.print("Parking:");
-      lcd.print(parking.flameDetected ? "FLAME" : (parking.isDangerous ? "DANGER" : "SAFE"));
-      lcd.setCursor(0,1);
-      lcd.print("G:");
-      lcd.print(parking.gasLevel);
-      break;
-  }
-}
-
-// ====== Send JSON to ESP32 via Serial ======
+// ====== Send comprehensive JSON data to ESP32 ======
 void sendDataToESP32() {
-  StaticJsonDocument<512> doc;
-  doc["temperature"] = temperature;
-  doc["humidity"] = humidity;
-  doc["preciseTemp"] = preciseTemp;
-  doc["airQuality"] = airQuality;
+  StaticJsonDocument<1024> doc;
+  
+  // System-wide information
+  doc["systemEmergency"] = systemEmergency;
   doc["timestamp"] = millis();
-
-  JsonObject bed = doc.createNestedObject("bedroom");
-  bed["flame"] = bedroom.flameDetected;
-  bed["gas"] = bedroom.gasLevel;
-  bed["emergency"] = bedroom.isEmergency;
-  bed["dangerous"] = bedroom.isDangerous;
-
+  doc["emergencyDuration"] = (emergencyStartTime > 0) ? (millis() - emergencyStartTime) : 0;
+  
+  // Global environmental data
+  JsonObject env = doc.createNestedObject("environment");
+  env["globalTemperature"] = globalTemperature;
+  env["globalHumidity"] = globalHumidity;
+  
+  // Kitchen data (DHT11 + MQ135 + Flame + Buzzer + LEDs)
   JsonObject kit = doc.createNestedObject("kitchen");
-  kit["flame"] = kitchen.flameDetected;
-  kit["gas"] = kitchen.gasLevel;
-  kit["emergency"] = kitchen.isEmergency;
-  kit["dangerous"] = kitchen.isDangerous;
-
+  kit["temperature"] = kitchen.temperature;
+  kit["humidity"] = kitchen.humidity;
+  kit["airQuality"] = kitchen.airQuality;
+  kit["flameDetected"] = kitchen.flameDetected;
+  kit["gasLevel"] = kitchen.gasLevel; // Using airQuality as gas reference
+  kit["isEmergency"] = kitchen.isEmergency;
+  kit["isDangerous"] = kitchen.isDangerous;
+  kit["sensorTypes"] = "DHT11,MQ135,Flame";
+  kit["hasComponents"] = "Buzzer,LEDs";
+  
+  // Bedroom data (DS18B20 + MQ2 + Flame + Buzzer + LEDs)
+  JsonObject bed = doc.createNestedObject("bedroom");
+  bed["temperature"] = bedroom.temperature;
+  bed["gasLevel"] = bedroom.gasLevel;
+  bed["flameDetected"] = bedroom.flameDetected;
+  bed["isEmergency"] = bedroom.isEmergency;
+  bed["isDangerous"] = bedroom.isDangerous;
+  bed["sensorTypes"] = "DS18B20,MQ2,Flame";
+  bed["hasComponents"] = "Buzzer,LEDs";
+  
+  // Parking data (MQ2 + Flame + LEDs)
   JsonObject park = doc.createNestedObject("parking");
-  park["flame"] = parking.flameDetected;
-  park["gas"] = parking.gasLevel;
-  park["emergency"] = parking.isEmergency;
-  park["dangerous"] = parking.isDangerous;
-
-  // Serialize and send
+  park["gasLevel"] = parking.gasLevel;
+  park["flameDetected"] = parking.flameDetected;
+  park["isEmergency"] = parking.isEmergency;
+  park["isDangerous"] = parking.isDangerous;
+  park["sensorTypes"] = "MQ2,Flame";
+  park["hasComponents"] = "LEDs";
+  
+  // Central Gas Chamber data (MQ2 + Buzzer)
+  JsonObject central = doc.createNestedObject("centralGas");
+  central["gasLevel"] = centralGas.gasLevel;
+  central["isEmergency"] = centralGas.isEmergency;
+  central["isDangerous"] = centralGas.isDangerous;
+  central["sensorTypes"] = "MQ2";
+  central["hasComponents"] = "Buzzer";
+  
+  // Critical thresholds for ESP32 reference
+  JsonObject thresholds = doc.createNestedObject("thresholds");
+  thresholds["mq2_warning"] = MQ2_THRESHOLD;
+  thresholds["mq2_critical"] = MQ2_CRITICAL;
+  thresholds["mq135_warning"] = MQ135_THRESHOLD;
+  thresholds["mq135_critical"] = MQ135_CRITICAL;
+  thresholds["temp_high"] = TEMP_THRESHOLD_HIGH;
+  thresholds["temp_critical"] = TEMP_CRITICAL;
+  
+  // Serialize and send with DATA: prefix for ESP32 parsing
+  Serial.print("DATA:");
   serializeJson(doc, Serial);
   Serial.println(); // newline as message delimiter
   dataSendCount++;
 }
 
-// ====== Print status to Serial (human readable) ======
+// ====== Print detailed system status ======
 void printSystemStatus() {
-  Serial.println("--- Status ---");
-  Serial.print("T: "); Serial.print(temperature,1); Serial.print("C  H: "); Serial.print(humidity,0); Serial.println("%");
-  Serial.print("DS18B20: "); Serial.print(preciseTemp,1); Serial.println("C");
-  Serial.print("AQ(MQ135): "); Serial.println(airQuality);
-  Serial.print("Bedroom - Flame: "); Serial.print(bedroom.flameDetected); Serial.print(" Gas: "); Serial.print(bedroom.gasLevel); Serial.print(" Danger: "); Serial.println(bedroom.isDangerous);
-  Serial.print("Kitchen  - Flame: "); Serial.print(kitchen.flameDetected); Serial.print(" Gas: "); Serial.print(kitchen.gasLevel); Serial.print(" Danger: "); Serial.println(kitchen.isDangerous);
-  Serial.print("Parking  - Flame: "); Serial.print(parking.flameDetected); Serial.print(" Gas: "); Serial.print(parking.gasLevel); Serial.print(" Danger: "); Serial.println(parking.isDangerous);
-  Serial.print("JSON messages sent: "); Serial.println(dataSendCount);
-  Serial.println("---------------");
+  Serial.println("=================== SYSTEM STATUS ===================");
+  Serial.print("System Emergency: "); Serial.println(systemEmergency ? "YES" : "NO");
+  if (emergencyStartTime > 0) {
+    Serial.print("Emergency Duration: "); Serial.print((millis() - emergencyStartTime)/1000); Serial.println(" seconds");
+  }
+  
+  Serial.println("\n--- KITCHEN (DHT11, MQ135, Flame) ---");
+  Serial.print("Temperature: "); Serial.print(kitchen.temperature,1); Serial.println("°C");
+  Serial.print("Humidity: "); Serial.print(kitchen.humidity,1); Serial.println("%");
+  Serial.print("Air Quality (MQ135): "); Serial.println(kitchen.airQuality);
+  Serial.print("Flame: "); Serial.print(kitchen.flameDetected ? "DETECTED" : "None");
+  Serial.print(" | Status: "); 
+  if (kitchen.isEmergency) Serial.println("EMERGENCY");
+  else if (kitchen.isDangerous) Serial.println("DANGEROUS");
+  else Serial.println("SAFE");
+  
+  Serial.println("\n--- BEDROOM (DS18B20, MQ2, Flame) ---");
+  Serial.print("Temperature: "); Serial.print(bedroom.temperature,1); Serial.println("°C");
+  Serial.print("Gas Level (MQ2): "); Serial.println(bedroom.gasLevel);
+  Serial.print("Flame: "); Serial.print(bedroom.flameDetected ? "DETECTED" : "None");
+  Serial.print(" | Status: ");
+  if (bedroom.isEmergency) Serial.println("EMERGENCY");
+  else if (bedroom.isDangerous) Serial.println("DANGEROUS");
+  else Serial.println("SAFE");
+  
+  Serial.println("\n--- PARKING (MQ2, Flame) ---");
+  Serial.print("Gas Level (MQ2): "); Serial.println(parking.gasLevel);
+  Serial.print("Flame: "); Serial.print(parking.flameDetected ? "DETECTED" : "None");
+  Serial.print(" | Status: ");
+  if (parking.isEmergency) Serial.println("EMERGENCY");
+  else if (parking.isDangerous) Serial.println("DANGEROUS");
+  else Serial.println("SAFE");
+  
+  Serial.println("\n--- CENTRAL GAS CHAMBER (MQ2) ---");
+  Serial.print("Gas Level (MQ2): "); Serial.println(centralGas.gasLevel);
+  Serial.print("Status: ");
+  if (centralGas.isEmergency) Serial.println("EMERGENCY");
+  else if (centralGas.isDangerous) Serial.println("DANGEROUS");
+  else Serial.println("SAFE");
+  
+  Serial.print("\nJSON Data Packets Sent: "); Serial.println(dataSendCount);
+  Serial.println("======================================================\n");
+}
+
+// ====== Handle system-wide emergency coordination ======
+void handleSystemEmergency() {
+  static bool lastEmergencyState = false;
+  
+  if (systemEmergency != lastEmergencyState) {
+    if (systemEmergency) {
+      Serial.println("\n🚨🚨🚨 SYSTEM-WIDE EMERGENCY ACTIVATED! 🚨🚨🚨");
+      Serial.println("Emergency detected in one or more segments!");
+      Serial.println("All alerts activated - ESP32 notified for Firebase emergency protocol");
+      
+      // Flash all available LEDs in emergency pattern
+      for (int i = 0; i < 5; i++) {
+        digitalWrite(LED_RED_KITCHEN, HIGH);
+        digitalWrite(LED_RED_BEDROOM, HIGH);
+        digitalWrite(LED_RED_PARKING, HIGH);
+        delay(200);
+        digitalWrite(LED_RED_KITCHEN, LOW);
+        digitalWrite(LED_RED_BEDROOM, LOW);
+        digitalWrite(LED_RED_PARKING, LOW);
+        delay(200);
+      }
+    } else {
+      Serial.println("\n✅ System emergency cleared - returning to normal monitoring");
+    }
+    lastEmergencyState = systemEmergency;
+  }
 }
