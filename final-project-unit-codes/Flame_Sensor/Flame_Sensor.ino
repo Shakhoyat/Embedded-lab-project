@@ -1,499 +1,372 @@
 /*
- * Smart Building Monitoring System - ESP32 Code
- * Receives data from Arduino Mega and sends to Firebase
+ * Smart Building Monitoring System - Arduino Mega Code
+ * 3 Rooms: Bedroom, Kitchen, Parking Lot
  * 
- * Features:
- * - WiFi connectivity
- * - Firebase real-time database integration
- * - JSON data parsing from Arduino Mega
- * - Emergency alert system
- * - Web dashboard data provision
+ * Sensors:
+ * - DHT11 x1 (General temperature/humidity)
+ * - DS18B20 x1 (Precision temperature monitoring)
+ * - Flame Sensor x3 (One per room)
+ * - MQ2 x3 (Smoke/Gas detection per room)
+ * - MQ135 x1 (Air quality monitoring)
+ * 
+ * Components:
+ * - Buzzer x3 (One per room for alerts)
+ * - LEDs x6 (3 Green + 3 Red for room status)
+ * - LCD Display (System status)
  */
 
-#include <WiFi.h>
-#include <FirebaseESP32.h>
+#include <DHT.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <LiquidCrystal_I2C.h>
+#include <Wire.h>
 #include <ArduinoJson.h>
-#include <time.h>
-
-// ========== WIFI CONFIGURATION ==========
-const char* WIFI_SSID = "skt_pie";        // Replace with your WiFi name
-const char* WIFI_PASSWORD = "12104053"; // Replace with your WiFi password
-
-// ========== FIREBASE CONFIGURATION ==========
-#define FIREBASE_HOST "smart-building-monitoring-iot-default-rtdb.asia-southeast1.firebasedatabase.app"  // Updated with full URL
-#define FIREBASE_AUTH "wMpzysAkHQ2DnAUe9uoT8Y7YrmV3B6WUe5VHSYIE"          // Replace with your database secret
-#define API_KEY "AIzaSyDC9lCy5fUDA_zuUAnxVy0pZSqI3F5NuDM"                // Get this from Firebase Console
 
 // ========== PIN DEFINITIONS ==========
-#define STATUS_LED 2      // Built-in LED for connection status
-#define EMERGENCY_LED 4   // External LED for emergency indication
-#define WIFI_LED 5        // LED for WiFi status
+// DHT11 Sensor
+#define DHT_PIN 22
+#define DHT_TYPE DHT11
+
+// DS18B20 Temperature Sensor
+#define ONE_WIRE_BUS 23
+
+// Flame Sensors (Digital pins)
+#define FLAME_BEDROOM 24
+#define FLAME_KITCHEN 25
+#define FLAME_PARKING 26
+
+// MQ2 Gas Sensors (Analog pins)
+#define MQ2_BEDROOM A0
+#define MQ2_KITCHEN A1
+#define MQ2_PARKING A2
+
+// MQ135 Air Quality Sensor
+#define MQ135_PIN A3
+
+// Buzzers
+#define BUZZER_BEDROOM 27
+#define BUZZER_KITCHEN 28
+#define BUZZER_PARKING 3
+
+// LEDs - Green (Safe)
+#define LED_GREEN_BEDROOM 30
+#define LED_GREEN_KITCHEN 31
+#define LED_GREEN_PARKING 32
+
+// LEDs - Red (Danger)
+#define LED_RED_BEDROOM 33
+#define LED_RED_KITCHEN 34
+#define LED_RED_PARKING 35
+
+// LCD Display (I2C)
+#define LCD_ADDRESS 0x27
+#define LCD_COLS 16
+#define LCD_ROWS 2
+
+// ========== SENSOR THRESHOLDS ==========
+#define MQ2_THRESHOLD 300      // Gas/Smoke threshold (analog)
+#define MQ135_THRESHOLD 400    // Air quality threshold (analog)
+#define TEMP_THRESHOLD_HIGH 35 // High temperature alert (°C)
+#define TEMP_THRESHOLD_LOW 10  // Low temperature alert (°C)
+#define HUMIDITY_HIGH 70       // High humidity alert (%)
+
+// ========== SENSOR OBJECTS ==========
+DHT dht(DHT_PIN, DHT_TYPE);
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature ds18b20(&oneWire);
+LiquidCrystal_I2C lcd(LCD_ADDRESS, LCD_COLS, LCD_ROWS);
+
+// ========== ROOM STATUS STRUCTURE ==========
+struct RoomData {
+  const char* roomName;
+  bool flameDetected;
+  int gasLevel;
+  bool isEmergency;
+  bool isDangerous;
+};
+
+RoomData bedroom = {"Bedroom", false, 0, false, false};
+RoomData kitchen = {"Kitchen", false, 0, false, false};
+RoomData parking = {"Parking", false, 0, false, false};
 
 // ========== GLOBAL VARIABLES ==========
-FirebaseData firebaseData;
-FirebaseConfig config;
-FirebaseAuth auth;
-String receivedData = "";
-unsigned long lastHeartbeat = 0;
-unsigned long lastEmergencyCheck = 0;
-bool emergencyState = false;
-int dataReceiveCount = 0;
-bool firebaseConnected = false;
+float temperature = 0;
+float humidity = 0;
+float preciseTemp = 0;
+int airQuality = 0;
+unsigned long lastSensorRead = 0;
+unsigned long lastDisplayUpdate = 0;
+unsigned long lastDataSend = 0;
+int currentRoom = 0; // For LCD display cycling
+int dataSendCount = 0;
 
-// ========== TIME CONFIGURATION ==========
-const char* ntpServer = "pool.ntp.org";
-const long gmtOffset_sec = 0;      // Adjust for your timezone
-const int daylightOffset_sec = 3600;
+const unsigned long SENSOR_INTERVAL = 2000;
+const unsigned long DISPLAY_INTERVAL = 3000;
+const unsigned long SEND_INTERVAL = 5000;
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("\n=== SMART BUILDING ESP32 GATEWAY ===");
-  Serial.println("Initializing system...");
+  Serial.println("=== SMART BUILDING MONITORING SYSTEM ===");
+  Serial.println("Initializing sensors and components...");
   
-  // Initialize pins
-  pinMode(STATUS_LED, OUTPUT);
-  pinMode(EMERGENCY_LED, OUTPUT);
-  pinMode(WIFI_LED, OUTPUT);
+  // Initialize sensors
+  dht.begin();
+  ds18b20.begin();
   
-  // Initial LED state
-  digitalWrite(STATUS_LED, LOW);
-  digitalWrite(EMERGENCY_LED, LOW);
-  digitalWrite(WIFI_LED, LOW);
+  // Initialize LCD
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print("Smart Building");
+  lcd.setCursor(0, 1);
+  lcd.print("Initializing...");
   
-  // Connect to WiFi
-  connectToWiFi();
+  // Initialize flame sensor pins
+  pinMode(FLAME_BEDROOM, INPUT);
+  pinMode(FLAME_KITCHEN, INPUT);
+  pinMode(FLAME_PARKING, INPUT);
   
-  // Initialize Firebase
-  initializeFirebase();
+  // Initialize buzzer pins
+  pinMode(BUZZER_BEDROOM, OUTPUT);
+  pinMode(BUZZER_KITCHEN, OUTPUT);
+  pinMode(BUZZER_PARKING, OUTPUT);
   
-  // Initialize time
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  // Initialize LED pins
+  pinMode(LED_GREEN_BEDROOM, OUTPUT);
+  pinMode(LED_GREEN_KITCHEN, OUTPUT);
+  pinMode(LED_GREEN_PARKING, OUTPUT);
+  pinMode(LED_RED_BEDROOM, OUTPUT);
+  pinMode(LED_RED_KITCHEN, OUTPUT);
+  pinMode(LED_RED_PARKING, OUTPUT);
   
-  // Send initial system status
-  sendSystemInfo();
+  // Turn on all green LEDs initially (safe state)
+  digitalWrite(LED_GREEN_BEDROOM, HIGH);
+  digitalWrite(LED_GREEN_KITCHEN, HIGH);
+  digitalWrite(LED_GREEN_PARKING, HIGH);
   
-  Serial.println("ESP32 Gateway ready to receive data from Arduino Mega");
-  Serial.println("Waiting for sensor data...");
+  // Turn off all red LEDs and buzzers
+  digitalWrite(LED_RED_BEDROOM, LOW);
+  digitalWrite(LED_RED_KITCHEN, LOW);
+  digitalWrite(LED_RED_PARKING, LOW);
+  digitalWrite(BUZZER_BEDROOM, LOW);
+  digitalWrite(BUZZER_KITCHEN, LOW);
+  digitalWrite(BUZZER_PARKING, LOW);
+  
+  delay(1500);
+  lcd.clear();
+  lcd.setCursor(0,0);
+  lcd.print("System Ready");
+  lcd.setCursor(0,1);
+  lcd.print("Monitoring...");
+  delay(1000);
+  
+  Serial.println("System initialized successfully!");
+  Serial.println("Monitoring 3 rooms: Bedroom, Kitchen, Parking Lot");
+  Serial.println("=====================================");
 }
 
 void loop() {
   unsigned long currentTime = millis();
   
-  // Check WiFi connection
-  if (WiFi.status() != WL_CONNECTED) {
-    digitalWrite(WIFI_LED, LOW);
-    Serial.println("⚠️ WiFi disconnected! Attempting reconnection...");
-    reconnectWiFi();
+  if (currentTime - lastSensorRead >= SENSOR_INTERVAL) {
+    lastSensorRead = currentTime;
+    readAllSensors();
+    analyzeRoomSafety();
+    controlAlertsAndLEDs();
+  }
+  
+  if (currentTime - lastDisplayUpdate >= DISPLAY_INTERVAL) {
+    lastDisplayUpdate = currentTime;
+    updateLCDDisplay();
+    currentRoom = (currentRoom + 1) % 4; // 0: env, 1: bedroom, 2: kitchen, 3: parking
+  }
+  
+  if (currentTime - lastDataSend >= SEND_INTERVAL) {
+    lastDataSend = currentTime;
+    sendDataToESP32();
+    printSystemStatus();
+  }
+}
+
+// ====== Read sensors ======
+void readAllSensors() {
+  // Read DHT11 (Temperature and Humidity)
+  float h = dht.readHumidity();
+  float t = dht.readTemperature();
+  if (!isnan(h)) humidity = h;
+  if (!isnan(t)) temperature = t;
+  
+  // Read DS18B20 (Precise Temperature)
+  ds18b20.requestTemperatures();
+  float dsTemp = ds18b20.getTempCByIndex(0);
+  if (dsTemp != DEVICE_DISCONNECTED_C) preciseTemp = dsTemp;
+  
+  // Read Flame Sensors (many modules output LOW when flame detected)
+  bedroom.flameDetected = (digitalRead(FLAME_BEDROOM) == LOW);
+  kitchen.flameDetected = (digitalRead(FLAME_KITCHEN) == LOW);
+  parking.flameDetected = (digitalRead(FLAME_PARKING) == LOW);
+  
+  // Read MQ2 Gas Sensors
+  bedroom.gasLevel = analogRead(MQ2_BEDROOM);
+  kitchen.gasLevel = analogRead(MQ2_KITCHEN);
+  parking.gasLevel = analogRead(MQ2_PARKING);
+  
+  // Read MQ135 Air Quality
+  airQuality = analogRead(MQ135_PIN);
+}
+
+// ====== Analyze safety for each room ======
+void analyzeRoomSafety() {
+  // Bedroom
+  bedroom.isEmergency = bedroom.flameDetected;
+  bedroom.isDangerous = bedroom.isEmergency ||
+                         (bedroom.gasLevel > MQ2_THRESHOLD) ||
+                         (temperature > TEMP_THRESHOLD_HIGH) ||
+                         (airQuality > MQ135_THRESHOLD);
+  // Kitchen
+  kitchen.isEmergency = kitchen.flameDetected;
+  kitchen.isDangerous = kitchen.isEmergency ||
+                         (kitchen.gasLevel > MQ2_THRESHOLD) ||
+                         (temperature > TEMP_THRESHOLD_HIGH) ||
+                         (airQuality > MQ135_THRESHOLD);
+  // Parking
+  parking.isEmergency = parking.flameDetected;
+  parking.isDangerous = parking.isEmergency ||
+                         (parking.gasLevel > MQ2_THRESHOLD) ||
+                         (temperature > TEMP_THRESHOLD_HIGH) ||
+                         (airQuality > MQ135_THRESHOLD);
+}
+
+// ====== Control buzzers and LEDs ======
+void controlAlertsAndLEDs() {
+  // Bedroom LEDs / buzzer
+  if (bedroom.isDangerous) {
+    digitalWrite(LED_RED_BEDROOM, HIGH);
+    digitalWrite(LED_GREEN_BEDROOM, LOW);
   } else {
-    digitalWrite(WIFI_LED, HIGH);
+    digitalWrite(LED_RED_BEDROOM, LOW);
+    digitalWrite(LED_GREEN_BEDROOM, HIGH);
   }
-  
-  // Read data from Arduino Mega
-  if (Serial.available()) {
-    String incomingData = Serial.readString();
-    incomingData.trim();
-    
-    if (incomingData.startsWith("DATA:")) {
-      Serial.println("📨 Received data from Arduino Mega");
-      receivedData = incomingData.substring(5); // Remove "DATA:" prefix
-      processArduinoData();
-      dataReceiveCount++;
-      Serial.println("📊 Total data packets received: " + String(dataReceiveCount));
-    } else if (incomingData.length() > 0) {
-      Serial.println("📝 Arduino Debug: " + incomingData);
-    }
-  }
-  
-  // Send heartbeat every 30 seconds
-  if (currentTime - lastHeartbeat >= 30000) {
-    Serial.println("💓 Sending heartbeat to Firebase...");
-    sendHeartbeat();
-    lastHeartbeat = currentTime;
-  }
-  
-  // Check for emergency conditions every 5 seconds
-  if (currentTime - lastEmergencyCheck >= 5000) {
-    handleEmergencyAlerts();
-    lastEmergencyCheck = currentTime;
-  }
-  
-  // Blink status LED to show system is running
-  digitalWrite(STATUS_LED, !digitalRead(STATUS_LED));
-  
-  // Print system status every 60 seconds
-  static unsigned long lastStatusPrint = 0;
-  if (currentTime - lastStatusPrint >= 60000) {
-    Serial.println("\n=== SYSTEM STATUS SUMMARY ===");
-    Serial.println("🔗 WiFi: " + String(WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected"));
-    Serial.println("📡 Signal: " + String(WiFi.RSSI()) + " dBm");
-    Serial.println("🗄️ Firebase: " + String(firebaseConnected ? "Connected" : "Disconnected"));
-    Serial.println("⏱️ Uptime: " + String(millis() / 1000) + " seconds");
-    Serial.println("📦 Data packets: " + String(dataReceiveCount));
-    Serial.println("🔥 Emergency state: " + String(emergencyState ? "ACTIVE" : "Normal"));
-    Serial.println("=============================\n");
-    lastStatusPrint = currentTime;
-  }
-  
-  delay(500);
-}
-
-void connectToWiFi() {
-  Serial.print("Connecting to WiFi: ");
-  Serial.println(WIFI_SSID);
-  
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-    delay(1000);
-    Serial.print(".");
-    attempts++;
-  }
-  
-  if (WiFi.status() == WL_CONNECTED) {
-    digitalWrite(WIFI_LED, HIGH);
-    Serial.println();
-    Serial.println("✅ WiFi connected successfully!");
-    Serial.print("IP address: ");
-    Serial.println(WiFi.localIP());
-    Serial.print("Signal strength: ");
-    Serial.print(WiFi.RSSI());
-    Serial.println(" dBm");
+  if (bedroom.isEmergency) {
+    tone(BUZZER_BEDROOM, 2000, 500);
   } else {
-    Serial.println();
-    Serial.println("❌ Failed to connect to WiFi");
-    Serial.println("Please check your credentials and try again");
+    noTone(BUZZER_BEDROOM);
   }
-}
 
-void reconnectWiFi() {
-  Serial.println("WiFi connection lost. Reconnecting...");
-  WiFi.disconnect();
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 10) {
-    delay(1000);
-    Serial.print(".");
-    attempts++;
-  }
-  
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\n✅ WiFi reconnected!");
-    digitalWrite(WIFI_LED, HIGH);
-  }
-}
-
-void initializeFirebase() {
-  Serial.println("Initializing Firebase connection...");
-  Serial.println("🔧 Database URL: https://" + String(FIREBASE_HOST));
-  
-  // Configure Firebase using config objects
-  Serial.println("🔄 Configuring Firebase with config objects...");
-  
-  // Set database URL and API key
-  config.database_url = "https://" + String(FIREBASE_HOST);
-  config.api_key = API_KEY;
-  
-  // Use database secret for authentication (legacy token)
-  config.signer.tokens.legacy_token = FIREBASE_AUTH;
-  
-  // Initialize Firebase with config objects
-  Firebase.begin(&config, &auth);
-  Firebase.reconnectWiFi(true);
-  
-  Serial.println("⏳ Testing Firebase connection...");
-  delay(3000); // Give time for connection
-  
-  // Test connection by trying to set a simple value
-  if (Firebase.setString(firebaseData, "/test/connection", "testing")) {
-    firebaseConnected = true;
-    Serial.println("✅ Firebase connection test successful!");
-    
-    // Set timeouts
-    Firebase.setReadTimeout(firebaseData, 30000);
-    Firebase.setwriteSizeLimit(firebaseData, "tiny");
-    
-    Serial.println("✅ Firebase initialized successfully!");
-    Serial.println("🗄️ Ready to send/receive data to/from Firebase");
+  // Kitchen LEDs / buzzer
+  if (kitchen.isDangerous) {
+    digitalWrite(LED_RED_KITCHEN, HIGH);
+    digitalWrite(LED_GREEN_KITCHEN, LOW);
   } else {
-    firebaseConnected = false;
-    Serial.println("❌ Firebase connection test failed");
-    Serial.println("🔍 Error reason: " + firebaseData.errorReason());
-    Serial.println("⚠️ System will continue running but data won't be sent to Firebase");
-    
-    // Print troubleshooting info
-    Serial.println("\n🛠️ TROUBLESHOOTING TIPS:");
-    Serial.println("1. Check your Firebase database URL");
-    Serial.println("2. Verify your database secret key");
-    Serial.println("3. Ensure Firebase Realtime Database is enabled");
-    Serial.println("4. Check database rules (should allow read/write)");
-    Serial.println("5. Try using Web API Key instead of database secret\n");
+    digitalWrite(LED_RED_KITCHEN, LOW);
+    digitalWrite(LED_GREEN_KITCHEN, HIGH);
   }
-}
-
-void processArduinoData() {
-  Serial.println("📊 Processing data from Arduino Mega...");
-  
-  // Parse JSON data
-  DynamicJsonDocument doc(1024);
-  DeserializationError error = deserializeJson(doc, receivedData);
-  
-  if (error) {
-    Serial.print("❌ JSON parsing error: ");
-    Serial.println(error.c_str());
-    Serial.println("📝 Raw data received: " + receivedData);
-    return;
-  }
-  
-  // Extract data
-  float temperature = doc["temperature"];
-  float humidity = doc["humidity"];
-  float preciseTemp = doc["preciseTemp"];
-  int airQuality = doc["airQuality"];
-  unsigned long timestamp = doc["timestamp"];
-  
-  Serial.println("🌡️ Environmental Data:");
-  Serial.println("   Temperature: " + String(temperature) + "°C");
-  Serial.println("   Humidity: " + String(humidity) + "%");
-  Serial.println("   Precise Temp: " + String(preciseTemp) + "°C");
-  Serial.println("   Air Quality: " + String(airQuality));
-  
-  // Get current time
-  time_t now;
-  struct tm timeinfo;
-  time(&now);
-  localtime_r(&now, &timeinfo);
-  char timeString[64];
-  strftime(timeString, sizeof(timeString), "%Y-%m-%d %H:%M:%S", &timeinfo);
-  
-  Serial.println("🔄 Sending environmental data to Firebase...");
-  
-  // Only send to Firebase if connected
-  if (firebaseConnected) {
-    // Send environmental data to Firebase
-    String envPath = "/smartBuilding/environmental";
-    if (Firebase.setFloat(firebaseData, envPath + "/temperature", temperature)) {
-      Firebase.setFloat(firebaseData, envPath + "/humidity", humidity);
-      Firebase.setFloat(firebaseData, envPath + "/preciseTemperature", preciseTemp);
-      Firebase.setInt(firebaseData, envPath + "/airQuality", airQuality);
-      Firebase.setString(firebaseData, envPath + "/lastUpdated", timeString);
-      Firebase.setInt(firebaseData, envPath + "/arduinoTimestamp", timestamp);
-      Serial.println("✅ Environmental data sent to Firebase");
-    } else {
-      Serial.println("❌ Failed to send environmental data to Firebase");
-      firebaseConnected = false; // Mark as disconnected for retry
-    }
+  if (kitchen.isEmergency) {
+    tone(BUZZER_KITCHEN, 2000, 500);
   } else {
-    Serial.println("⚠️ Firebase not connected - skipping environmental data upload");
+    noTone(BUZZER_KITCHEN);
   }
-  
-  // Process room data
-  Serial.println("🏠 Processing room data...");
-  processRoomData("bedroom", doc["bedroom"]);
-  processRoomData("kitchen", doc["kitchen"]);
-  processRoomData("parking", doc["parking"]);
-  
-  // Update system statistics
-  if (firebaseConnected) {
-    Firebase.setInt(firebaseData, "/smartBuilding/system/dataReceiveCount", dataReceiveCount);
-    Firebase.setString(firebaseData, "/smartBuilding/system/lastDataReceived", timeString);
-    Firebase.setString(firebaseData, "/smartBuilding/system/esp32Status", "online");
-    Serial.println("✅ System statistics updated in Firebase");
-  }
-  
-  Serial.println("✅ Data processing completed");
-  Serial.println("📈 Environmental: T=" + String(temperature) + "°C, H=" + String(humidity) + "%, AQ=" + String(airQuality));
-  Serial.println("---");
-}
 
-void processRoomData(String roomName, JsonObject roomData) {
-  bool flame = roomData["flame"];
-  int gas = roomData["gas"];
-  bool emergency = roomData["emergency"];
-  bool dangerous = roomData["dangerous"];
-  
-  String roomPath = "/smartBuilding/rooms/" + roomName;
-  
-  // Get current time
-  time_t now;
-  struct tm timeinfo;
-  time(&now);
-  localtime_r(&now, &timeinfo);
-  char timeString[64];
-  strftime(timeString, sizeof(timeString), "%Y-%m-%d %H:%M:%S", &timeinfo);
-  
-  // Determine room status
-  String status;
-  if (emergency) {
-    status = "EMERGENCY";
-  } else if (dangerous) {
-    status = "WARNING";
+  // Parking LEDs / buzzer
+  if (parking.isDangerous) {
+    digitalWrite(LED_RED_PARKING, HIGH);
+    digitalWrite(LED_GREEN_PARKING, LOW);
   } else {
-    status = "SAFE";
+    digitalWrite(LED_RED_PARKING, LOW);
+    digitalWrite(LED_GREEN_PARKING, HIGH);
   }
-  
-  // Send room data to Firebase
-  if (firebaseConnected) {
-    if (Firebase.setBool(firebaseData, roomPath + "/flameDetected", flame)) {
-      Firebase.setInt(firebaseData, roomPath + "/gasLevel", gas);
-      Firebase.setBool(firebaseData, roomPath + "/emergency", emergency);
-      Firebase.setBool(firebaseData, roomPath + "/dangerous", dangerous);
-      Firebase.setString(firebaseData, roomPath + "/lastUpdated", timeString);
-      Firebase.setString(firebaseData, roomPath + "/status", status);
-    } else {
-      Serial.println("❌ Failed to send " + roomName + " data to Firebase");
-    }
-  }
-  
-  // Log emergency events
-  if (emergency) {
-    String alertPath = "/smartBuilding/alerts/" + String(millis());
-    Firebase.setString(firebaseData, alertPath + "/type", "FIRE_EMERGENCY");
-    Firebase.setString(firebaseData, alertPath + "/room", roomName);
-    Firebase.setString(firebaseData, alertPath + "/timestamp", timeString);
-    Firebase.setString(firebaseData, alertPath + "/message", "Fire detected in " + roomName + "! Immediate evacuation required!");
-    Firebase.setBool(firebaseData, alertPath + "/acknowledged", false);
-    
-    Serial.println("🚨 EMERGENCY ALERT: Fire detected in " + roomName + "!");
-  }
-  
-  Serial.println("🏠 " + roomName + ": " + status + " (Gas: " + String(gas) + ")");
-  
-  // Additional detailed logging for each room
-  if (flame) {
-    Serial.println("   🔥 FLAME DETECTED!");
-  }
-  if (gas > 300) {  // Assuming 300 is threshold
-    Serial.println("   💨 High gas level: " + String(gas));
-  }
-  if (emergency) {
-    Serial.println("   🚨 EMERGENCY STATUS ACTIVE!");
-  } else if (dangerous) {
-    Serial.println("   ⚠️ WARNING STATUS ACTIVE!");
+  if (parking.isEmergency) {
+    digitalWrite(BUZZER_PARKING, HIGH);
   } else {
-    Serial.println("   ✅ Room status: SAFE");
+    digitalWrite(BUZZER_PARKING, LOW);
   }
 }
 
-void sendHeartbeat() {
-  time_t now;
-  struct tm timeinfo;
-  time(&now);
-  localtime_r(&now, &timeinfo);
-  char timeString[64];
-  strftime(timeString, sizeof(timeString), "%Y-%m-%d %H:%M:%S", &timeinfo);
-  
-  if (firebaseConnected) {
-    if (Firebase.setString(firebaseData, "/smartBuilding/system/esp32Heartbeat", timeString)) {
-      Firebase.setInt(firebaseData, "/smartBuilding/system/uptime", millis() / 1000);
-      Firebase.setInt(firebaseData, "/smartBuilding/system/wifiSignalStrength", WiFi.RSSI());
-      Firebase.setString(firebaseData, "/smartBuilding/system/esp32IP", WiFi.localIP().toString());
-      Serial.println("💓 Heartbeat sent - System uptime: " + String(millis() / 1000) + " seconds");
-    } else {
-      Serial.println("❌ Failed to send heartbeat to Firebase");
-      firebaseConnected = false; // Mark as disconnected
-    }
-  } else {
-    Serial.println("💓 Heartbeat skipped - Firebase not connected (Uptime: " + String(millis() / 1000) + "s)");
-    // Try simple reconnection every 5 heartbeats (2.5 minutes)
-    static int skipCount = 0;
-    skipCount++;
-    if (skipCount >= 5) {
-      Serial.println("🔄 Attempting simplified Firebase reconnection...");
-      // Use config objects for reconnection too
-      config.database_url = "https://" + String(FIREBASE_HOST);
-      config.api_key = API_KEY;
-      config.signer.tokens.legacy_token = FIREBASE_AUTH;
-      
-      Firebase.begin(&config, &auth);
-      delay(2000);
-      if (Firebase.setString(firebaseData, "/test/reconnect", "testing")) {
-        firebaseConnected = true;
-        Serial.println("✅ Firebase reconnected successfully!");
-      } else {
-        Serial.println("❌ Firebase reconnection failed");
-      }
-      skipCount = 0;
-    }
+// ====== LCD display cycling ======
+void updateLCDDisplay() {
+  lcd.clear();
+  switch (currentRoom) {
+    case 0: // Environmental summary
+      lcd.setCursor(0,0);
+      lcd.print("T:");
+      lcd.print(temperature,1);
+      lcd.print("C H:");
+      lcd.print(humidity,0);
+      lcd.setCursor(0,1);
+      lcd.print("AQ:");
+      lcd.print(map(airQuality,0,1023,0,500)); // rough scale
+      lcd.print(" DS:");
+      lcd.print(preciseTemp,1);
+      break;
+    case 1: // Bedroom
+      lcd.setCursor(0,0);
+      lcd.print("Bedroom:");
+      lcd.print(bedroom.flameDetected ? "FLAME" : (bedroom.isDangerous ? "DANGER" : "SAFE"));
+      lcd.setCursor(0,1);
+      lcd.print("G:");
+      lcd.print(bedroom.gasLevel);
+      break;
+    case 2: // Kitchen
+      lcd.setCursor(0,0);
+      lcd.print("Kitchen:");
+      lcd.print(kitchen.flameDetected ? "FLAME" : (kitchen.isDangerous ? "DANGER" : "SAFE"));
+      lcd.setCursor(0,1);
+      lcd.print("G:");
+      lcd.print(kitchen.gasLevel);
+      break;
+    case 3: // Parking
+      lcd.setCursor(0,0);
+      lcd.print("Parking:");
+      lcd.print(parking.flameDetected ? "FLAME" : (parking.isDangerous ? "DANGER" : "SAFE"));
+      lcd.setCursor(0,1);
+      lcd.print("G:");
+      lcd.print(parking.gasLevel);
+      break;
   }
 }
 
-void handleEmergencyAlerts() {
-  // Check if any room is in emergency state
-  Firebase.getString(firebaseData, "/smartBuilding/rooms/bedroom/emergency");
-  bool bedroomEmergency = firebaseData.stringData() == "true";
-  
-  Firebase.getString(firebaseData, "/smartBuilding/rooms/kitchen/emergency");
-  bool kitchenEmergency = firebaseData.stringData() == "true";
-  
-  Firebase.getString(firebaseData, "/smartBuilding/rooms/parking/emergency");
-  bool parkingEmergency = firebaseData.stringData() == "true";
-  
-  bool anyEmergency = bedroomEmergency || kitchenEmergency || parkingEmergency;
-  
-  // Only print if emergency state changes
-  if (anyEmergency != emergencyState) {
-    emergencyState = anyEmergency;
-    
-    if (emergencyState) {
-      digitalWrite(EMERGENCY_LED, HIGH);
-      Firebase.setString(firebaseData, "/smartBuilding/system/buildingStatus", "EMERGENCY");
-      Serial.println("🚨🚨🚨 BUILDING IN EMERGENCY STATE! 🚨🚨🚨");
-      Serial.println("🔥 Emergency rooms:");
-      if (bedroomEmergency) Serial.println("   - BEDROOM");
-      if (kitchenEmergency) Serial.println("   - KITCHEN");
-      if (parkingEmergency) Serial.println("   - PARKING LOT");
-      
-      // Send emergency notification
-      sendEmergencyNotification();
-    } else {
-      digitalWrite(EMERGENCY_LED, LOW);
-      Firebase.setString(firebaseData, "/smartBuilding/system/buildingStatus", "NORMAL");
-      Serial.println("✅ Building status returned to normal");
-    }
-  }
+// ====== Send JSON to ESP32 via Serial ======
+void sendDataToESP32() {
+  StaticJsonDocument<512> doc;
+  doc["temperature"] = temperature;
+  doc["humidity"] = humidity;
+  doc["preciseTemp"] = preciseTemp;
+  doc["airQuality"] = airQuality;
+  doc["timestamp"] = millis();
+
+  JsonObject bed = doc.createNestedObject("bedroom");
+  bed["flame"] = bedroom.flameDetected;
+  bed["gas"] = bedroom.gasLevel;
+  bed["emergency"] = bedroom.isEmergency;
+  bed["dangerous"] = bedroom.isDangerous;
+
+  JsonObject kit = doc.createNestedObject("kitchen");
+  kit["flame"] = kitchen.flameDetected;
+  kit["gas"] = kitchen.gasLevel;
+  kit["emergency"] = kitchen.isEmergency;
+  kit["dangerous"] = kitchen.isDangerous;
+
+  JsonObject park = doc.createNestedObject("parking");
+  park["flame"] = parking.flameDetected;
+  park["gas"] = parking.gasLevel;
+  park["emergency"] = parking.isEmergency;
+  park["dangerous"] = parking.isDangerous;
+
+  // Serialize and send
+  serializeJson(doc, Serial);
+  Serial.println(); // newline as message delimiter
+  dataSendCount++;
 }
 
-void sendEmergencyNotification() {
-  time_t now;
-  struct tm timeinfo;
-  time(&now);
-  localtime_r(&now, &timeinfo);
-  char timeString[64];
-  strftime(timeString, sizeof(timeString), "%Y-%m-%d %H:%M:%S", &timeinfo);
-  
-  String notificationPath = "/smartBuilding/notifications/" + String(millis());
-  Firebase.setString(firebaseData, notificationPath + "/type", "BUILDING_EMERGENCY");
-  Firebase.setString(firebaseData, notificationPath + "/title", "EMERGENCY ALERT");
-  Firebase.setString(firebaseData, notificationPath + "/message", "Fire detected in building! Contact emergency services immediately!");
-  Firebase.setString(firebaseData, notificationPath + "/timestamp", timeString);
-  Firebase.setString(firebaseData, notificationPath + "/priority", "HIGH");
-  Firebase.setBool(firebaseData, notificationPath + "/sent", true);
-  
-  // Set flag for web app to show emergency alert
-  Firebase.setBool(firebaseData, "/smartBuilding/system/showEmergencyAlert", true);
-  
-  Serial.println("📢 Emergency notification sent to Firebase for web app");
-}
-
-void sendSystemInfo() {
-  time_t now;
-  struct tm timeinfo;
-  time(&now);
-  localtime_r(&now, &timeinfo);
-  char timeString[64];
-  strftime(timeString, sizeof(timeString), "%Y-%m-%d %H:%M:%S", &timeinfo);
-  
-  Firebase.setString(firebaseData, "/smartBuilding/system/startupTime", timeString);
-  Firebase.setString(firebaseData, "/smartBuilding/system/esp32Version", "1.0.0");
-  Firebase.setString(firebaseData, "/smartBuilding/system/description", "Smart Building Monitoring System - 3 Room Configuration");
-  Firebase.setInt(firebaseData, "/smartBuilding/system/totalRooms", 3);
-  
-  // Room configuration
-  Firebase.setString(firebaseData, "/smartBuilding/config/room1", "Bedroom");
-  Firebase.setString(firebaseData, "/smartBuilding/config/room2", "Kitchen");
-  Firebase.setString(firebaseData, "/smartBuilding/config/room3", "Parking Lot");
-  
-  Serial.println("📋 System information sent to Firebase");
+// ====== Print status to Serial (human readable) ======
+void printSystemStatus() {
+  Serial.println("--- Status ---");
+  Serial.print("T: "); Serial.print(temperature,1); Serial.print("C  H: "); Serial.print(humidity,0); Serial.println("%");
+  Serial.print("DS18B20: "); Serial.print(preciseTemp,1); Serial.println("C");
+  Serial.print("AQ(MQ135): "); Serial.println(airQuality);
+  Serial.print("Bedroom - Flame: "); Serial.print(bedroom.flameDetected); Serial.print(" Gas: "); Serial.print(bedroom.gasLevel); Serial.print(" Danger: "); Serial.println(bedroom.isDangerous);
+  Serial.print("Kitchen  - Flame: "); Serial.print(kitchen.flameDetected); Serial.print(" Gas: "); Serial.print(kitchen.gasLevel); Serial.print(" Danger: "); Serial.println(kitchen.isDangerous);
+  Serial.print("Parking  - Flame: "); Serial.print(parking.flameDetected); Serial.print(" Gas: "); Serial.print(parking.gasLevel); Serial.print(" Danger: "); Serial.println(parking.isDangerous);
+  Serial.print("JSON messages sent: "); Serial.println(dataSendCount);
+  Serial.println("---------------");
 }

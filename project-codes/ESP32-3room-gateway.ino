@@ -24,6 +24,13 @@ const char* WIFI_PASSWORD = "12104053"; // Replace with your WiFi password
 #define FIREBASE_AUTH "wMpzysAkHQ2DnAUe9uoT8Y7YrmV3B6WUe5VHSYIE"          // Replace with your database secret
 #define API_KEY "AIzaSyDC9lCy5fUDA_zuUAnxVy0pZSqI3F5NuDM"                // Get this from Firebase Console
 
+// ========== EMERGENCY CONTACT CONFIGURATION ==========
+#define OWNER_EMAIL "owner@example.com"              // Replace with owner's email
+#define OWNER_PHONE "+8801XXXXXXXXX"                 // Replace with owner's phone
+#define FIRE_STATION_PHONE "01303488507"             // Fire station emergency number
+#define BUILDING_NAME "Smart Building Complex"       // Building identification
+#define BUILDING_ADDRESS "123 Main Street, Dhaka"    // Complete address for emergency
+
 // ========== PIN DEFINITIONS ==========
 #define STATUS_LED 2      // Built-in LED for connection status
 #define EMERGENCY_LED 4   // External LED for emergency indication
@@ -39,11 +46,13 @@ unsigned long lastEmergencyCheck = 0;
 bool emergencyState = false;
 int dataReceiveCount = 0;
 bool firebaseConnected = false;
+unsigned long lastNotificationId = 0;
+int totalAlertsGenerated = 0;
 
 // ========== TIME CONFIGURATION ==========
 const char* ntpServer = "pool.ntp.org";
-const long gmtOffset_sec = 0;      // Adjust for your timezone
-const int daylightOffset_sec = 3600;
+const long gmtOffset_sec = 19800;      // GMT+5:30 (Bangladesh time - adjust for your timezone)
+const int daylightOffset_sec = 0;
 
 void setup() {
   Serial.begin(115200);
@@ -63,14 +72,37 @@ void setup() {
   // Connect to WiFi
   connectToWiFi();
   
+  // Initialize time synchronization
+  Serial.println("🕐 Synchronizing time with NTP server...");
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer, "time.nist.gov", "time.google.com");
+  
+  // Wait for time synchronization (max 10 seconds)
+  int retries = 0;
+  time_t now = time(nullptr);
+  while (now < 1000000000 && retries < 20) {
+    delay(500);
+    Serial.print(".");
+    now = time(nullptr);
+    retries++;
+  }
+  Serial.println();
+  
+  if (now > 1000000000) {
+    Serial.println("✅ Time synchronized successfully!");
+    struct tm timeinfo;
+    getLocalTime(&timeinfo);
+    Serial.print("   Current time: ");
+    Serial.println(&timeinfo, "%Y-%m-%d %H:%M:%S");
+  } else {
+    Serial.println("⚠️ Time sync failed - timestamps may be incorrect");
+  }
+  
   // Initialize Firebase
   initializeFirebase();
   
-  // Initialize time
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-  
-  // Send initial system status
+  // Send initial system status and contact info
   sendSystemInfo();
+  sendContactConfiguration();
   
   Serial.println("ESP32 Gateway ready to receive data from Arduino Mega");
   Serial.println("Waiting for sensor data...");
@@ -348,14 +380,66 @@ void processRoomData(String roomName, JsonObject roomData) {
   
   // Log emergency events
   if (emergency) {
-    String alertPath = "/smartBuilding/alerts/" + String(millis());
+    // Create unique alert ID using timestamp
+    unsigned long alertId = millis();
+    String alertPath = "/smartBuilding/alerts/" + String(alertId);
+    
+    // Store comprehensive emergency data
     Firebase.setString(firebaseData, alertPath + "/type", "FIRE_EMERGENCY");
+    Firebase.setString(firebaseData, alertPath + "/severity", "CRITICAL");
     Firebase.setString(firebaseData, alertPath + "/room", roomName);
+    Firebase.setString(firebaseData, alertPath + "/roomDisplayName", capitalizeFirst(roomName));
     Firebase.setString(firebaseData, alertPath + "/timestamp", timeString);
-    Firebase.setString(firebaseData, alertPath + "/message", "Fire detected in " + roomName + "! Immediate evacuation required!");
+    Firebase.setInt(firebaseData, alertPath + "/timestampUnix", now);
+    Firebase.setString(firebaseData, alertPath + "/message", "🔥 FIRE DETECTED in " + capitalizeFirst(roomName) + "! Immediate evacuation required!");
     Firebase.setBool(firebaseData, alertPath + "/acknowledged", false);
+    Firebase.setBool(firebaseData, alertPath + "/flameDetected", flame);
+    Firebase.setInt(firebaseData, alertPath + "/gasLevel", gas);
+    
+    // Store notification actions needed
+    Firebase.setBool(firebaseData, alertPath + "/actions/emailSent", false);
+    Firebase.setBool(firebaseData, alertPath + "/actions/smsSent", false);
+    Firebase.setBool(firebaseData, alertPath + "/actions/callInitiated", false);
+    Firebase.setBool(firebaseData, alertPath + "/actions/notificationSent", false);
+    
+    // Store building and contact info for easy access
+    Firebase.setString(firebaseData, alertPath + "/buildingName", BUILDING_NAME);
+    Firebase.setString(firebaseData, alertPath + "/buildingAddress", BUILDING_ADDRESS);
+    
+    totalAlertsGenerated++;
+    Firebase.setInt(firebaseData, "/smartBuilding/system/totalAlerts", totalAlertsGenerated);
+    
+    // Create notification queue entry
+    createNotificationEntry(alertId, roomName, "FIRE", timeString, gas, flame);
     
     Serial.println("🚨 EMERGENCY ALERT: Fire detected in " + roomName + "!");
+    Serial.println("   Alert ID: " + String(alertId));
+  }
+  
+  // Log gas warnings (dangerous but no flame)
+  if (dangerous && !emergency) {
+    unsigned long alertId = millis();
+    String alertPath = "/smartBuilding/alerts/" + String(alertId);
+    
+    Firebase.setString(firebaseData, alertPath + "/type", "GAS_WARNING");
+    Firebase.setString(firebaseData, alertPath + "/severity", "WARNING");
+    Firebase.setString(firebaseData, alertPath + "/room", roomName);
+    Firebase.setString(firebaseData, alertPath + "/roomDisplayName", capitalizeFirst(roomName));
+    Firebase.setString(firebaseData, alertPath + "/timestamp", timeString);
+    Firebase.setInt(firebaseData, alertPath + "/timestampUnix", now);
+    Firebase.setString(firebaseData, alertPath + "/message", "⚠️ High gas/smoke level detected in " + capitalizeFirst(roomName));
+    Firebase.setBool(firebaseData, alertPath + "/acknowledged", false);
+    Firebase.setInt(firebaseData, alertPath + "/gasLevel", gas);
+    
+    // Store notification actions
+    Firebase.setBool(firebaseData, alertPath + "/actions/emailSent", false);
+    Firebase.setBool(firebaseData, alertPath + "/actions/notificationSent", false);
+    
+    totalAlertsGenerated++;
+    Firebase.setInt(firebaseData, "/smartBuilding/system/totalAlerts", totalAlertsGenerated);
+    
+    // Create notification queue entry for gas warning
+    createNotificationEntry(alertId, roomName, "GAS", timeString, gas, false);
   }
   
   Serial.println("🏠 " + roomName + ": " + status + " (Gas: " + String(gas) + ")");
@@ -486,7 +570,7 @@ void sendSystemInfo() {
   strftime(timeString, sizeof(timeString), "%Y-%m-%d %H:%M:%S", &timeinfo);
   
   Firebase.setString(firebaseData, "/smartBuilding/system/startupTime", timeString);
-  Firebase.setString(firebaseData, "/smartBuilding/system/esp32Version", "1.0.0");
+  Firebase.setString(firebaseData, "/smartBuilding/system/esp32Version", "2.0.0");
   Firebase.setString(firebaseData, "/smartBuilding/system/description", "Smart Building Monitoring System - 3 Room Configuration");
   Firebase.setInt(firebaseData, "/smartBuilding/system/totalRooms", 3);
   
@@ -496,4 +580,160 @@ void sendSystemInfo() {
   Firebase.setString(firebaseData, "/smartBuilding/config/room3", "Parking Lot");
   
   Serial.println("📋 System information sent to Firebase");
+}
+
+// ========== HELPER FUNCTIONS ==========
+
+// Get formatted timestamp
+String getFormattedTime() {
+  time_t now = time(nullptr);
+  
+  if (now < 1000000000) {
+    return "Time Not Set";
+  }
+  
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    return "Time Error";
+  }
+  
+  char buffer[25];
+  strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &timeinfo);
+  return String(buffer);
+}
+
+// Capitalize first letter of string
+String capitalizeFirst(String str) {
+  if (str.length() == 0) return str;
+  String result = str;
+  result[0] = toupper(result[0]);
+  return result;
+}
+
+// Send contact configuration to Firebase for web app
+void sendContactConfiguration() {
+  Serial.println("📞 Sending contact configuration to Firebase...");
+  
+  String contactPath = "/smartBuilding/contacts";
+  
+  // Owner information
+  Firebase.setString(firebaseData, contactPath + "/owner/email", OWNER_EMAIL);
+  Firebase.setString(firebaseData, contactPath + "/owner/phone", OWNER_PHONE);
+  Firebase.setString(firebaseData, contactPath + "/owner/name", "Building Owner");
+  Firebase.setBool(firebaseData, contactPath + "/owner/notifyOnEmergency", true);
+  Firebase.setBool(firebaseData, contactPath + "/owner/notifyOnWarning", true);
+  
+  // Fire station information
+  Firebase.setString(firebaseData, contactPath + "/fireStation/phone", FIRE_STATION_PHONE);
+  Firebase.setString(firebaseData, contactPath + "/fireStation/name", "Fire Station");
+  Firebase.setBool(firebaseData, contactPath + "/fireStation/autoCallOnFire", true);
+  
+  // Building information
+  Firebase.setString(firebaseData, contactPath + "/building/name", BUILDING_NAME);
+  Firebase.setString(firebaseData, contactPath + "/building/address", BUILDING_ADDRESS);
+  
+  Serial.println("✅ Contact configuration sent successfully");
+}
+
+// Create notification entry in queue for web app to process
+void createNotificationEntry(unsigned long alertId, String room, String type, String timestamp, int gasLevel, bool flameDetected) {
+  String notifyPath = "/smartBuilding/notificationQueue/" + String(alertId);
+  
+  // Notification metadata
+  Firebase.setString(firebaseData, notifyPath + "/id", String(alertId));
+  Firebase.setString(firebaseData, notifyPath + "/type", type);
+  Firebase.setString(firebaseData, notifyPath + "/room", room);
+  Firebase.setString(firebaseData, notifyPath + "/timestamp", timestamp);
+  Firebase.setBool(firebaseData, notifyPath + "/processed", false);
+  Firebase.setString(firebaseData, notifyPath + "/status", "PENDING");
+  
+  // Alert details
+  Firebase.setInt(firebaseData, notifyPath + "/details/gasLevel", gasLevel);
+  Firebase.setBool(firebaseData, notifyPath + "/details/flameDetected", flameDetected);
+  
+  // Determine message and priority based on type
+  String message, title, priority;
+  bool requiresCall = false;
+  
+  if (type == "FIRE") {
+    title = "🔥 FIRE EMERGENCY!";
+    message = "CRITICAL: Fire detected in " + capitalizeFirst(room) + " of " + String(BUILDING_NAME) + 
+              ". Location: " + String(BUILDING_ADDRESS) + ". EVACUATE IMMEDIATELY!";
+    priority = "CRITICAL";
+    requiresCall = true;
+    
+    Firebase.setString(firebaseData, notifyPath + "/actions/email/subject", "🚨 FIRE EMERGENCY - " + String(BUILDING_NAME));
+    Firebase.setString(firebaseData, notifyPath + "/actions/email/body", 
+      "FIRE ALERT!\n\n" +
+      String("Building: ") + BUILDING_NAME + "\n" +
+      String("Location: ") + BUILDING_ADDRESS + "\n" +
+      String("Room: ") + capitalizeFirst(room) + "\n" +
+      String("Time: ") + timestamp + "\n" +
+      String("Gas Level: ") + String(gasLevel) + "\n\n" +
+      "ACTION REQUIRED:\n" +
+      "1. Evacuate building immediately\n" +
+      "2. Call fire station: " + String(FIRE_STATION_PHONE) + "\n" +
+      "3. Check security camera footage\n" +
+      "4. Account for all occupants\n\n" +
+      "This is an automated alert from your Smart Building Monitoring System.");
+    
+    Firebase.setString(firebaseData, notifyPath + "/actions/sms/message", 
+      "🔥 FIRE ALERT! " + capitalizeFirst(room) + " at " + String(BUILDING_NAME) + ". EVACUATE NOW! Fire Station: " + String(FIRE_STATION_PHONE));
+    
+    Firebase.setString(firebaseData, notifyPath + "/actions/call/number", FIRE_STATION_PHONE);
+    Firebase.setString(firebaseData, notifyPath + "/actions/call/message", 
+      "Emergency fire alert at " + String(BUILDING_NAME) + ", " + String(BUILDING_ADDRESS) + ". Fire detected in " + capitalizeFirst(room) + ". Please respond immediately.");
+    
+  } else if (type == "GAS") {
+    title = "⚠️ Gas/Smoke Warning";
+    message = "WARNING: High gas/smoke level (" + String(gasLevel) + ") detected in " + capitalizeFirst(room) + 
+              " of " + String(BUILDING_NAME) + ". Please investigate.";
+    priority = "HIGH";
+    requiresCall = false;
+    
+    Firebase.setString(firebaseData, notifyPath + "/actions/email/subject", "⚠️ Gas Warning - " + String(BUILDING_NAME));
+    Firebase.setString(firebaseData, notifyPath + "/actions/email/body", 
+      "Gas/Smoke Warning\n\n" +
+      String("Building: ") + BUILDING_NAME + "\n" +
+      String("Location: ") + BUILDING_ADDRESS + "\n" +
+      String("Room: ") + capitalizeFirst(room) + "\n" +
+      String("Time: ") + timestamp + "\n" +
+      String("Gas Level: ") + String(gasLevel) + " (Threshold: 300)\n\n" +
+      "RECOMMENDED ACTIONS:\n" +
+      "1. Check the affected room\n" +
+      "2. Ventilate the area\n" +
+      "3. Investigate the source\n" +
+      "4. Monitor for escalation\n\n" +
+      "This is an automated alert from your Smart Building Monitoring System.");
+    
+    Firebase.setString(firebaseData, notifyPath + "/actions/sms/message", 
+      "⚠️ GAS WARNING: High gas level (" + String(gasLevel) + ") in " + capitalizeFirst(room) + " at " + String(BUILDING_NAME) + ". Please check.");
+  }
+  
+  Firebase.setString(firebaseData, notifyPath + "/title", title);
+  Firebase.setString(firebaseData, notifyPath + "/message", message);
+  Firebase.setString(firebaseData, notifyPath + "/priority", priority);
+  
+  // Contact information
+  Firebase.setString(firebaseData, notifyPath + "/contacts/ownerEmail", OWNER_EMAIL);
+  Firebase.setString(firebaseData, notifyPath + "/contacts/ownerPhone", OWNER_PHONE);
+  Firebase.setString(firebaseData, notifyPath + "/contacts/fireStationPhone", FIRE_STATION_PHONE);
+  Firebase.setString(firebaseData, notifyPath + "/contacts/buildingName", BUILDING_NAME);
+  Firebase.setString(firebaseData, notifyPath + "/contacts/buildingAddress", BUILDING_ADDRESS);
+  
+  // Action flags
+  Firebase.setBool(firebaseData, notifyPath + "/actions/sendEmail", true);
+  Firebase.setBool(firebaseData, notifyPath + "/actions/sendSMS", true);
+  Firebase.setBool(firebaseData, notifyPath + "/actions/sendPushNotification", true);
+  Firebase.setBool(firebaseData, notifyPath + "/actions/callFireStation", requiresCall);
+  
+  // Completion tracking
+  Firebase.setBool(firebaseData, notifyPath + "/completion/emailSent", false);
+  Firebase.setBool(firebaseData, notifyPath + "/completion/smsSent", false);
+  Firebase.setBool(firebaseData, notifyPath + "/completion/pushSent", false);
+  Firebase.setBool(firebaseData, notifyPath + "/completion/callMade", false);
+  Firebase.setString(firebaseData, notifyPath + "/completion/lastAttempt", "");
+  
+  Serial.println("📬 Notification queue entry created: ID " + String(alertId));
+  Serial.println("   Type: " + type + " | Room: " + room + " | Priority: " + priority);
 }
