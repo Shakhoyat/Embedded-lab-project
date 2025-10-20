@@ -9,12 +9,11 @@
  * - Central Gas Chamber: MQ2, Buzzer
  * 
  * Features:
- * - WiFi connectivity
- * - Firebase real-time database integration
- * - JSON data parsing from Arduino Mega
- * - LCD display showing sensor data in cyclic order
+ * - WiFi connectivity and Firebase integration
+ * - LCD display with cyclic segment data visualization
  * - Emergency alert system with KUET fire brigade notification
- * - Admin/caretaker alerting system
+ * - Admin and caretaker alerting system
+ * - Real-time monitoring and data logging
  */
 
 #include <WiFi.h>
@@ -104,7 +103,7 @@ const int daylightOffset_sec = 0;
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("\n=== SMART BUILDING ESP32 GATEWAY ===");
+  Serial.println("Smart Building ESP32 Gateway");
   Serial.println("4 Segments: Kitchen, Bedroom, Parking, Central Gas Chamber");
   Serial.println("Initializing system...");
   
@@ -148,7 +147,7 @@ void setup() {
   lcd.print("Syncing time...");
   
   // Initialize time synchronization
-  Serial.println("🕐 Synchronizing time with NTP server...");
+  Serial.println("Synchronizing time with NTP server...");
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer, "time.nist.gov", "time.google.com");
   
   // Wait for time synchronization (max 10 seconds)
@@ -163,10 +162,10 @@ void setup() {
   Serial.println();
   
   if (now > 1000000000) {
-    Serial.println("✅ Time synchronized successfully!");
+    Serial.println("Time synchronized successfully");
     struct tm timeinfo;
     getLocalTime(&timeinfo);
-    Serial.print("   Current time: ");
+    Serial.print("Current time: ");
     Serial.println(&timeinfo, "%Y-%m-%d %H:%M:%S");
     
     lcd.clear();
@@ -175,7 +174,7 @@ void setup() {
     lcd.setCursor(0, 1);
     lcd.print("Init Firebase...");
   } else {
-    Serial.println("⚠️ Time sync failed - timestamps may be incorrect");
+    Serial.println("Time sync failed - timestamps may be incorrect");
     lcd.clear();
     lcd.setCursor(0, 0);
     lcd.print("Time sync failed");
@@ -217,7 +216,7 @@ void loop() {
   // Check WiFi connection
   if (WiFi.status() != WL_CONNECTED) {
     digitalWrite(WIFI_LED, LOW);
-    Serial.println("⚠️ WiFi disconnected! Attempting reconnection...");
+    Serial.println("WiFi disconnected - attempting reconnection...");
     reconnectWiFi();
   } else {
     digitalWrite(WIFI_LED, HIGH);
@@ -236,19 +235,19 @@ void loop() {
     incomingData.trim();
     
     if (incomingData.startsWith("DATA:")) {
-      Serial.println("📨 Received data from Arduino Mega");
+      Serial.println("Data received from Arduino Mega");
       receivedData = incomingData.substring(5); // Remove "DATA:" prefix
       processArduinoData();
       dataReceiveCount++;
-      Serial.println("📊 Total data packets received: " + String(dataReceiveCount));
+      Serial.println("Total data packets received: " + String(dataReceiveCount));
     } else if (incomingData.length() > 0) {
-      Serial.println("📝 Arduino Debug: " + incomingData);
+      Serial.println("Arduino Debug: " + incomingData);
     }
   }
   
   // Send heartbeat every 30 seconds
   if (currentTime - lastHeartbeat >= 30000) {
-    Serial.println("💓 Sending heartbeat to Firebase...");
+    Serial.println("Sending heartbeat to Firebase...");
     sendHeartbeat();
     lastHeartbeat = currentTime;
   }
@@ -265,14 +264,14 @@ void loop() {
   // Print system status every 60 seconds
   static unsigned long lastStatusPrint = 0;
   if (currentTime - lastStatusPrint >= 60000) {
-    Serial.println("\n=== SYSTEM STATUS SUMMARY ===");
-    Serial.println("🔗 WiFi: " + String(WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected"));
-    Serial.println("📡 Signal: " + String(WiFi.RSSI()) + " dBm");
-    Serial.println("🗄️ Firebase: " + String(firebaseConnected ? "Connected" : "Disconnected"));
-    Serial.println("⏱️ Uptime: " + String(millis() / 1000) + " seconds");
-    Serial.println("📦 Data packets: " + String(dataReceiveCount));
-    Serial.println("🔥 Emergency state: " + String(emergencyState ? "ACTIVE" : "Normal"));
-    Serial.println("=============================\n");
+    Serial.println("System Status Summary:");
+    Serial.println("WiFi: " + String(WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected"));
+    Serial.println("Signal: " + String(WiFi.RSSI()) + " dBm");
+    Serial.println("Firebase: " + String(firebaseConnected ? "Connected" : "Disconnected"));
+    Serial.println("Uptime: " + String(millis() / 1000) + " seconds");
+    Serial.println("Data packets: " + String(dataReceiveCount));
+    Serial.println("Emergency state: " + String(emergencyState ? "ACTIVE" : "Normal"));
+    Serial.println("Status summary complete");
     lastStatusPrint = currentTime;
   }
   
@@ -295,7 +294,7 @@ void connectToWiFi() {
   if (WiFi.status() == WL_CONNECTED) {
     digitalWrite(WIFI_LED, HIGH);
     Serial.println();
-    Serial.println("✅ WiFi connected successfully!");
+    Serial.println("WiFi connected successfully");
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
     Serial.print("Signal strength: ");
@@ -303,7 +302,7 @@ void connectToWiFi() {
     Serial.println(" dBm");
   } else {
     Serial.println();
-    Serial.println("❌ Failed to connect to WiFi");
+    Serial.println("Failed to connect to WiFi");
     Serial.println("Please check your credentials and try again");
   }
 }
@@ -321,17 +320,17 @@ void reconnectWiFi() {
   }
   
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\n✅ WiFi reconnected!");
+    Serial.println("WiFi reconnected");
     digitalWrite(WIFI_LED, HIGH);
   }
 }
 
 void initializeFirebase() {
   Serial.println("Initializing Firebase connection...");
-  Serial.println("🔧 Database URL: https://" + String(FIREBASE_HOST));
+  Serial.println("Database URL: https://" + String(FIREBASE_HOST));
   
   // Configure Firebase using config objects
-  Serial.println("🔄 Configuring Firebase with config objects...");
+  Serial.println("Configuring Firebase with config objects...");
   
   // Set database URL and API key
   config.database_url = "https://" + String(FIREBASE_HOST);
@@ -344,47 +343,47 @@ void initializeFirebase() {
   Firebase.begin(&config, &auth);
   Firebase.reconnectWiFi(true);
   
-  Serial.println("⏳ Testing Firebase connection...");
+  Serial.println("Testing Firebase connection...");
   delay(3000); // Give time for connection
   
   // Test connection by trying to set a simple value
   if (Firebase.setString(firebaseData, "/test/connection", "testing")) {
     firebaseConnected = true;
-    Serial.println("✅ Firebase connection test successful!");
+    Serial.println("Firebase connection test successful");
     
     // Set timeouts
     Firebase.setReadTimeout(firebaseData, 30000);
     Firebase.setwriteSizeLimit(firebaseData, "tiny");
     
-    Serial.println("✅ Firebase initialized successfully!");
-    Serial.println("🗄️ Ready to send/receive data to/from Firebase");
+    Serial.println("Firebase initialized successfully");
+    Serial.println("Ready to send/receive data to/from Firebase");
   } else {
     firebaseConnected = false;
-    Serial.println("❌ Firebase connection test failed");
-    Serial.println("🔍 Error reason: " + firebaseData.errorReason());
-    Serial.println("⚠️ System will continue running but data won't be sent to Firebase");
+    Serial.println("Firebase connection test failed");
+    Serial.println("Error reason: " + firebaseData.errorReason());
+    Serial.println("System will continue running but data won't be sent to Firebase");
     
     // Print troubleshooting info
-    Serial.println("\n🛠️ TROUBLESHOOTING TIPS:");
+    Serial.println("TROUBLESHOOTING TIPS:");
     Serial.println("1. Check your Firebase database URL");
     Serial.println("2. Verify your database secret key");
     Serial.println("3. Ensure Firebase Realtime Database is enabled");
     Serial.println("4. Check database rules (should allow read/write)");
-    Serial.println("5. Try using Web API Key instead of database secret\n");
+    Serial.println("5. Try using Web API Key instead of database secret");
   }
 }
 
 void processArduinoData() {
-  Serial.println("📊 Processing data from Arduino Mega (4 segments)...");
+  Serial.println("Processing data from Arduino Mega (4 segments)...");
   
   // Parse JSON data
   DynamicJsonDocument doc(1536); // Increased size for 4 segments
   DeserializationError error = deserializeJson(doc, receivedData);
   
   if (error) {
-    Serial.print("❌ JSON parsing error: ");
+    Serial.print("JSON parsing error: ");
     Serial.println(error.c_str());
-    Serial.println("📝 Raw data received: " + receivedData);
+    Serial.println("Raw data received: " + receivedData);
     return;
   }
   
@@ -398,10 +397,10 @@ void processArduinoData() {
   globalTemperature = env["globalTemperature"];
   globalHumidity = env["globalHumidity"];
   
-  Serial.println("🌍 System Status:");
-  Serial.println("   System Emergency: " + String(systemEmergency ? "YES" : "NO"));
-  Serial.println("   Global Temperature: " + String(globalTemperature) + "°C");
-  Serial.println("   Global Humidity: " + String(globalHumidity) + "%");
+  Serial.println("System Status:");
+  Serial.println("  System Emergency: " + String(systemEmergency ? "YES" : "NO"));
+  Serial.println("  Global Temperature: " + String(globalTemperature) + "°C");
+  Serial.println("  Global Humidity: " + String(globalHumidity) + "%");
   
   // Get current time
   time_t now;
@@ -419,7 +418,7 @@ void processArduinoData() {
   
   // Send consolidated data to Firebase
   if (firebaseConnected) {
-    Serial.println("🔄 Sending data to Firebase...");
+    Serial.println("Sending data to Firebase...");
     
     // System-wide status
     String systemPath = "/smartBuilding/system";
@@ -431,17 +430,16 @@ void processArduinoData() {
     Firebase.setInt(firebaseData, systemPath + "/dataReceiveCount", dataReceiveCount);
     Firebase.setString(firebaseData, systemPath + "/esp32Status", "online");
     
-    Serial.println("✅ System data sent to Firebase");
+    Serial.println("System data sent to Firebase");
   } else {
-    Serial.println("⚠️ Firebase not connected - skipping data upload");
+    Serial.println("Firebase not connected - skipping data upload");
   }
   
-  Serial.println("✅ Data processing completed");
-  Serial.println("📊 Segments processed: Kitchen, Bedroom, Parking, Central Gas");
-  Serial.println("---");
+  Serial.println("Data processing completed");
+  Serial.println("Segments processed: Kitchen, Bedroom, Parking, Central Gas");
 }
 
-// ====== Process individual segment data ======
+// Process individual segment data
 void processSegmentData(String segmentName, JsonObject segmentData, SegmentInfo &segment) {
   // Update segment information
   segment.temperature = segmentData["temperature"];
@@ -498,16 +496,16 @@ void processSegmentData(String segmentName, JsonObject segmentData, SegmentInfo 
   }
   
   // Log segment status
-  Serial.println("🏢 " + segmentName + ": " + status);
-  Serial.println("   Sensors: " + segment.sensorTypes);
-  if (segment.temperature > 0) Serial.println("   Temperature: " + String(segment.temperature, 1) + "°C");
-  if (segment.humidity > 0) Serial.println("   Humidity: " + String(segment.humidity, 1) + "%");
-  if (segment.gasLevel > 0) Serial.println("   Gas Level: " + String(segment.gasLevel));
-  if (segment.airQuality > 0) Serial.println("   Air Quality: " + String(segment.airQuality));
-  if (segment.flameDetected) Serial.println("   🔥 FLAME DETECTED!");
+  Serial.println(segmentName + ": " + status);
+  Serial.println("  Sensors: " + segment.sensorTypes);
+  if (segment.temperature > 0) Serial.println("  Temperature: " + String(segment.temperature, 1) + "°C");
+  if (segment.humidity > 0) Serial.println("  Humidity: " + String(segment.humidity, 1) + "%");
+  if (segment.gasLevel > 0) Serial.println("  Gas Level: " + String(segment.gasLevel));
+  if (segment.airQuality > 0) Serial.println("  Air Quality: " + String(segment.airQuality));
+  if (segment.flameDetected) Serial.println("  FLAME DETECTED");
 }
 
-// ====== LCD Display Management ======
+// LCD Display Management
 void updateLCDDisplay() {
   lcd.clear();
   
@@ -595,156 +593,141 @@ void updateLCDDisplay() {
   }
 }
 
-// ====== Emergency Alert Handling ======
+// Emergency Alert Handling
 void handleEmergencyAlert(String segmentName, SegmentInfo &segment, String timeString) {
   // Create unique alert ID
   unsigned long alertId = millis();
   String alertPath = "/smartBuilding/alerts/" + String(alertId);
   
-  // Determine alert type
-  String alertType = segment.flameDetected ? "FIRE_EMERGENCY" : "CRITICAL_CONDITIONS";
-  String severity = "CRITICAL";
+  Serial.println("EMERGENCY in " + segmentName + "! Creating alert...");
   
-  // Store comprehensive emergency data
-  Firebase.setString(firebaseData, alertPath + "/type", alertType);
-  Firebase.setString(firebaseData, alertPath + "/severity", severity);
-  Firebase.setString(firebaseData, alertPath + "/segment", segmentName);
-  Firebase.setString(firebaseData, alertPath + "/segmentDisplayName", capitalizeFirst(segmentName));
-  Firebase.setString(firebaseData, alertPath + "/timestamp", timeString);
-  Firebase.setInt(firebaseData, alertPath + "/timestampUnix", time(nullptr));
-  
-  String message;
+  // Determine cause of emergency
+  String cause = "Multiple critical readings";
   if (segment.flameDetected) {
-    message = "🔥 FIRE DETECTED in " + capitalizeFirst(segmentName) + "! Immediate evacuation required!";
-  } else {
-    message = "🚨 CRITICAL CONDITIONS in " + capitalizeFirst(segmentName) + "! Immediate attention required!";
+    cause = "Flame detected";
+  } else if (segment.temperature > 80) {
+    cause = "Critical temperature";
+  } else if (segment.gasLevel > 800) {
+    cause = "Critical gas level";
   }
-  Firebase.setString(firebaseData, alertPath + "/message", message);
+  
+  // Create notification content
+  String title = "FIRE EMERGENCY!";
+  String body = "Emergency in " + segmentName + " at " + BUILDING_NAME + ". Cause: " + cause + ".";
+  
+  // Send data to Firebase
+  Firebase.setString(firebaseData, alertPath + "/segment", segmentName);
+  Firebase.setString(firebaseData, alertPath + "/type", "EMERGENCY");
+  Firebase.setString(firebaseData, alertPath + "/cause", cause);
+  Firebase.setString(firebaseData, alertPath + "/timestamp", timeString);
   Firebase.setBool(firebaseData, alertPath + "/acknowledged", false);
   
-  // Store detailed sensor data
-  Firebase.setBool(firebaseData, alertPath + "/details/flameDetected", segment.flameDetected);
-  Firebase.setInt(firebaseData, alertPath + "/details/gasLevel", segment.gasLevel);
-  Firebase.setFloat(firebaseData, alertPath + "/details/temperature", segment.temperature);
-  Firebase.setFloat(firebaseData, alertPath + "/details/humidity", segment.humidity);
-  Firebase.setInt(firebaseData, alertPath + "/details/airQuality", segment.airQuality);
+  // Send notification via Firebase
+  Firebase.setString(firebaseData, alertPath + "/notification/title", title);
+  Firebase.setString(firebaseData, alertPath + "/notification/body", body);
   
-  // Store building information for KUET fire brigade
-  Firebase.setString(firebaseData, alertPath + "/buildingName", BUILDING_NAME);
-  Firebase.setString(firebaseData, alertPath + "/buildingAddress", BUILDING_ADDRESS);
-  Firebase.setString(firebaseData, alertPath + "/fireBrigadePhone", FIRE_BRIGADE_PHONE);
+  Serial.println("Emergency alert created for " + segmentName);
   
-  // Store contact information
-  Firebase.setString(firebaseData, alertPath + "/contacts/adminEmail", ADMIN_EMAIL);
-  Firebase.setString(firebaseData, alertPath + "/contacts/adminPhone", ADMIN_PHONE);
-  Firebase.setString(firebaseData, alertPath + "/contacts/caretakerEmail", CARETAKER_EMAIL);
-  Firebase.setString(firebaseData, alertPath + "/contacts/caretakerPhone", CARETAKER_PHONE);
-  
-  // Mark actions as pending
-  Firebase.setBool(firebaseData, alertPath + "/actions/emailSent", false);
-  Firebase.setBool(firebaseData, alertPath + "/actions/smsSent", false);
-  Firebase.setBool(firebaseData, alertPath + "/actions/fireBrigadeCalled", false);
-  Firebase.setBool(firebaseData, alertPath + "/actions/notificationSent", false);
-  
-  totalAlertsGenerated++;
-  Firebase.setInt(firebaseData, "/smartBuilding/system/totalAlerts", totalAlertsGenerated);
-  
-  // Create notification for KUET fire brigade and admin
-  createKUETFireBrigadeNotification(alertId, segmentName, alertType, timeString, segment);
-  
-  Serial.println("🚨 EMERGENCY ALERT: " + alertType + " in " + segmentName);
-  Serial.println("   Alert ID: " + String(alertId));
-  Serial.println("   KUET Fire Brigade notification created");
+  // Trigger special notification for KUET Fire Brigade
+  createKUETFireBrigadeNotification(segmentName, cause, timeString);
 }
 
+// Warning Alert Handling
 void handleWarningAlert(String segmentName, SegmentInfo &segment, String timeString) {
   unsigned long alertId = millis();
-  String alertPath = "/smartBuilding/alerts/" + String(alertId);
+  String alertPath = "/smartBuilding/warnings/" + String(alertId);
   
-  Firebase.setString(firebaseData, alertPath + "/type", "WARNING");
-  Firebase.setString(firebaseData, alertPath + "/severity", "HIGH");
-  Firebase.setString(firebaseData, alertPath + "/segment", segmentName);
-  Firebase.setString(firebaseData, alertPath + "/timestamp", timeString);
-  Firebase.setString(firebaseData, alertPath + "/message", "⚠️ Warning conditions detected in " + capitalizeFirst(segmentName));
-  Firebase.setBool(firebaseData, alertPath + "/acknowledged", false);
+  Serial.println("WARNING in " + segmentName + ". Creating alert...");
   
-  // Store sensor data
-  Firebase.setInt(firebaseData, alertPath + "/details/gasLevel", segment.gasLevel);
-  Firebase.setFloat(firebaseData, alertPath + "/details/temperature", segment.temperature);
-  Firebase.setInt(firebaseData, alertPath + "/details/airQuality", segment.airQuality);
-  
-  totalAlertsGenerated++;
-  Firebase.setInt(firebaseData, "/smartBuilding/system/totalAlerts", totalAlertsGenerated);
-  
-  Serial.println("⚠️ WARNING ALERT: Conditions in " + segmentName + " require attention");
-}
-
-// ====== KUET Fire Brigade Notification System ======
-void createKUETFireBrigadeNotification(unsigned long alertId, String segment, String alertType, String timestamp, SegmentInfo &segmentInfo) {
-  String notifyPath = "/smartBuilding/emergencyNotifications/" + String(alertId);
-  
-  // Emergency notification metadata
-  Firebase.setString(firebaseData, notifyPath + "/id", String(alertId));
-  Firebase.setString(firebaseData, notifyPath + "/type", alertType);
-  Firebase.setString(firebaseData, notifyPath + "/segment", segment);
-  Firebase.setString(firebaseData, notifyPath + "/timestamp", timestamp);
-  Firebase.setBool(firebaseData, notifyPath + "/processed", false);
-  Firebase.setString(firebaseData, notifyPath + "/status", "URGENT");
-  Firebase.setString(firebaseData, notifyPath + "/priority", "CRITICAL");
-  
-  // Building information for emergency responders
-  Firebase.setString(firebaseData, notifyPath + "/buildingInfo/name", BUILDING_NAME);
-  Firebase.setString(firebaseData, notifyPath + "/buildingInfo/address", BUILDING_ADDRESS);
-  Firebase.setString(firebaseData, notifyPath + "/buildingInfo/area", "Fulbarigate, KUET Campus Area");
-  Firebase.setString(firebaseData, notifyPath + "/buildingInfo/coordinates", "22.8145° N, 89.5145° E");
-  
-  // Emergency details for KUET Fire Brigade
-  String emergencyMessage;
-  if (alertType == "FIRE_EMERGENCY") {
-    emergencyMessage = "FIRE EMERGENCY at " + String(BUILDING_NAME) + ", " + String(BUILDING_ADDRESS) + ". " +
-                      "FIRE DETECTED in " + capitalizeFirst(segment) + " area. " +
-                      "Temperature: " + String(segmentInfo.temperature, 1) + "°C, " +
-                      "Gas Level: " + String(segmentInfo.gasLevel) + ". " +
-                      "IMMEDIATE RESPONSE REQUIRED!";
-  } else {
-    emergencyMessage = "CRITICAL EMERGENCY at " + String(BUILDING_NAME) + ", " + String(BUILDING_ADDRESS) + ". " +
-                      "Critical conditions in " + capitalizeFirst(segment) + " area. " +
-                      "Temperature: " + String(segmentInfo.temperature, 1) + "°C, " +
-                      "Gas Level: " + String(segmentInfo.gasLevel) + ". " +
-                      "PLEASE RESPOND IMMEDIATELY!";
+  // Determine cause of warning
+  String cause = "High readings detected";
+  if (segment.temperature > 50) {
+    cause = "High temperature";
+  } else if (segment.gasLevel > 400) {
+    cause = "High gas level";
   }
   
-  Firebase.setString(firebaseData, notifyPath + "/emergencyMessage", emergencyMessage);
+  // Create notification content
+  String title = "Warning: " + segmentName;
+  String body = "Potential danger detected in " + segmentName + " at " + BUILDING_NAME + ". Cause: " + cause + ".";
   
-  // Contact information
-  Firebase.setString(firebaseData, notifyPath + "/contacts/fireBrigadePhone", FIRE_BRIGADE_PHONE);
-  Firebase.setString(firebaseData, notifyPath + "/contacts/adminPhone", ADMIN_PHONE);
-  Firebase.setString(firebaseData, notifyPath + "/contacts/caretakerPhone", CARETAKER_PHONE);
+  // Send data to Firebase
+  Firebase.setString(firebaseData, alertPath + "/segment", segmentName);
+  Firebase.setString(firebaseData, alertPath + "/type", "WARNING");
+  Firebase.setString(firebaseData, alertPath + "/cause", cause);
+  Firebase.setString(firebaseData, alertPath + "/timestamp", timeString);
   
-  // Action flags for automated response
-  Firebase.setBool(firebaseData, notifyPath + "/actions/callFireBrigade", true);
-  Firebase.setBool(firebaseData, notifyPath + "/actions/notifyAdmin", true);
-  Firebase.setBool(firebaseData, notifyPath + "/actions/notifyCaretaker", true);
-  Firebase.setBool(firebaseData, notifyPath + "/actions/sendSMS", true);
-  Firebase.setBool(firebaseData, notifyPath + "/actions/sendEmail", true);
+  // Send notification
+  Firebase.setString(firebaseData, alertPath + "/notification/title", title);
+  Firebase.setString(firebaseData, alertPath + "/notification/body", body);
   
-  // Completion tracking
-  Firebase.setBool(firebaseData, notifyPath + "/completion/fireBrigadeCalled", false);
-  Firebase.setBool(firebaseData, notifyPath + "/completion/adminNotified", false);
-  Firebase.setBool(firebaseData, notifyPath + "/completion/caretakerNotified", false);
-  Firebase.setBool(firebaseData, notifyPath + "/completion/smsSent", false);
-  Firebase.setBool(firebaseData, notifyPath + "/completion/emailSent", false);
+  Serial.println("Warning alert sent for " + segmentName);
+}
+
+// Special notification for KUET Fire Brigade
+void createKUETFireBrigadeNotification(String segmentName, String cause, String timeString) {
+  unsigned long notifyId = millis();
+  String notifyPath = "/smartBuilding/emergency_notifications/" + String(notifyId);
   
-  // Emergency response instructions
-  Firebase.setString(firebaseData, notifyPath + "/instructions/immediate", "1. Call KUET Fire Brigade: " + String(FIRE_BRIGADE_PHONE));
-  Firebase.setString(firebaseData, notifyPath + "/instructions/secondary", "2. Evacuate building, 3. Check all occupants, 4. Secure area");
-  Firebase.setString(firebaseData, notifyPath + "/instructions/location", "Building located near KUET campus at Fulbarigate");
+  Serial.println("Creating special notification for KUET Fire Brigade...");
   
-  Serial.println("📞 KUET Fire Brigade notification created:");
-  Serial.println("   Emergency: " + alertType + " in " + segment);
-  Serial.println("   Fire Brigade: " + String(FIRE_BRIGADE_PHONE));
-  Serial.println("   Building: " + String(BUILDING_NAME));
-  Serial.println("   Location: " + String(BUILDING_ADDRESS));
+  String title = "FIRE EMERGENCY!";
+  String subject = "FIRE EMERGENCY - " + String(BUILDING_NAME);
+  String body = "This is an automated fire alert.\n\n"
+                "Building: " + String(BUILDING_NAME) + "\n"
+                "Address: " + String(BUILDING_ADDRESS) + "\n"
+                "Location of Fire: " + segmentName + "\n"
+                "Cause: " + cause + "\n"
+                "Time: " + timeString + "\n\n"
+                "Please dispatch emergency services immediately.\n"
+                "Admin Contact: " + String(ADMIN_PHONE) + "\n"
+                "Caretaker Contact: " + String(CARETAKER_PHONE);
+
+  // Send notification data to Firebase (for email/SMS trigger)
+  Firebase.setString(firebaseData, notifyPath + "/recipient", "KUET Fire Brigade");
+  Firebase.setString(firebaseData, notifyPath + "/timestamp", timeString);
+  Firebase.setString(firebaseData, notifyPath + "/details/building", BUILDING_NAME);
+  Firebase.setString(firebaseData, notifyPath + "/details/address", BUILDING_ADDRESS);
+  Firebase.setString(firebaseData, notifyPath + "/details/location", segmentName);
+  Firebase.setString(firebaseData, notifyPath + "/details/cause", cause);
+  
+  // Email action
+  Firebase.setString(firebaseData, notifyPath + "/actions/email/to", "kuetfire@example.com");
+  Firebase.setString(firebaseData, notifyPath + "/actions/email/subject", subject);
+  Firebase.setString(firebaseData, notifyPath + "/actions/email/body", body);
+  
+  // SMS action
+  Firebase.setString(firebaseData, notifyPath + "/actions/sms/to", FIRE_BRIGADE_PHONE);
+  Firebase.setString(firebaseData, notifyPath + "/actions/sms/message", title + " at " + BUILDING_NAME + ". Location: " + segmentName + ". Cause: " + cause + ". Dispatch immediately.");
+  
+  Serial.println("KUET Fire Brigade notification prepared and sent to Firebase queue");
+}
+
+// Send system information to Firebase
+void sendSystemInfo() {
+  Serial.println("Sending system info to Firebase...");
+  String path = "/smartBuilding/system/info";
+  
+  Firebase.setString(firebaseData, path + "/buildingName", BUILDING_NAME);
+  Firebase.setString(firebaseData, path + "/address", BUILDING_ADDRESS);
+  Firebase.setString(firebaseData, path + "/esp32IP", WiFi.localIP().toString());
+  Firebase.setString(firebaseData, path + "/wifiSSID", WIFI_SSID);
+  
+  Serial.println("System info sent successfully");
+}
+
+// Send contact configuration to Firebase
+void sendContactConfiguration() {
+  Serial.println("Sending contact configuration to Firebase...");
+  String path = "/smartBuilding/config/contacts";
+  
+  Firebase.setString(firebaseData, path + "/admin/email", ADMIN_EMAIL);
+  Firebase.setString(firebaseData, path + "/admin/phone", ADMIN_PHONE);
+  Firebase.setString(firebaseData, path + "/caretaker/email", CARETAKER_EMAIL);
+  Firebase.setString(firebaseData, path + "/caretaker/phone", CARETAKER_PHONE);
+  Firebase.setString(firebaseData, path + "/emergency_services/fire_brigade_phone", FIRE_BRIGADE_PHONE);
+  
+  Serial.println("Contact configuration sent successfully");
 }
 
 void sendHeartbeat() {
@@ -760,18 +743,18 @@ void sendHeartbeat() {
       Firebase.setInt(firebaseData, "/smartBuilding/system/uptime", millis() / 1000);
       Firebase.setInt(firebaseData, "/smartBuilding/system/wifiSignalStrength", WiFi.RSSI());
       Firebase.setString(firebaseData, "/smartBuilding/system/esp32IP", WiFi.localIP().toString());
-      Serial.println("💓 Heartbeat sent - System uptime: " + String(millis() / 1000) + " seconds");
+      Serial.println("Heartbeat sent - System uptime: " + String(millis() / 1000) + " seconds");
     } else {
-      Serial.println("❌ Failed to send heartbeat to Firebase");
+      Serial.println("Failed to send heartbeat to Firebase");
       firebaseConnected = false; // Mark as disconnected
     }
   } else {
-    Serial.println("💓 Heartbeat skipped - Firebase not connected (Uptime: " + String(millis() / 1000) + "s)");
+    Serial.println("Heartbeat skipped - Firebase not connected (Uptime: " + String(millis() / 1000) + "s)");
     // Try simple reconnection every 5 heartbeats (2.5 minutes)
     static int skipCount = 0;
     skipCount++;
     if (skipCount >= 5) {
-      Serial.println("🔄 Attempting simplified Firebase reconnection...");
+      Serial.println("Attempting simplified Firebase reconnection...");
       // Use config objects for reconnection too
       config.database_url = "https://" + String(FIREBASE_HOST);
       config.api_key = API_KEY;
@@ -781,92 +764,50 @@ void sendHeartbeat() {
       delay(2000);
       if (Firebase.setString(firebaseData, "/test/reconnect", "testing")) {
         firebaseConnected = true;
-        Serial.println("✅ Firebase reconnected successfully!");
+        Serial.println("Firebase reconnected successfully");
       } else {
-        Serial.println("❌ Firebase reconnection failed");
+        Serial.println("Firebase reconnection failed");
       }
       skipCount = 0;
     }
   }
 }
 
+// Handle overall emergency state
 void handleEmergencyAlerts() {
-  // Check if any room is in emergency state
-  Firebase.getString(firebaseData, "/smartBuilding/rooms/bedroom/emergency");
-  bool bedroomEmergency = firebaseData.stringData() == "true";
+  bool currentEmergency = systemEmergency || kitchen.isEmergency || bedroom.isEmergency || parking.isEmergency || centralGas.isEmergency;
   
-  Firebase.getString(firebaseData, "/smartBuilding/rooms/kitchen/emergency");
-  bool kitchenEmergency = firebaseData.stringData() == "true";
-  
-  Firebase.getString(firebaseData, "/smartBuilding/rooms/parking/emergency");
-  bool parkingEmergency = firebaseData.stringData() == "true";
-  
-  bool anyEmergency = bedroomEmergency || kitchenEmergency || parkingEmergency;
-  
-  // Only print if emergency state changes
-  if (anyEmergency != emergencyState) {
-    emergencyState = anyEmergency;
-    
-    if (emergencyState) {
+  if (currentEmergency) {
+    if (!emergencyState) {
+      // New emergency detected
+      emergencyState = true;
       digitalWrite(EMERGENCY_LED, HIGH);
-      Firebase.setString(firebaseData, "/smartBuilding/system/buildingStatus", "EMERGENCY");
-      Serial.println("🚨🚨🚨 BUILDING IN EMERGENCY STATE! 🚨🚨🚨");
-      Serial.println("🔥 Emergency rooms:");
-      if (bedroomEmergency) Serial.println("   - BEDROOM");
-      if (kitchenEmergency) Serial.println("   - KITCHEN");
-      if (parkingEmergency) Serial.println("   - PARKING LOT");
-      
-      // Send emergency notification
-      sendEmergencyNotification();
-    } else {
+      Serial.println("System-wide emergency state ACTIVATED");
+    }
+    // Emergency is ongoing
+    digitalWrite(EMERGENCY_LED, !digitalRead(EMERGENCY_LED)); // Blink LED
+  } else {
+    if (emergencyState) {
+      // Emergency has ended
+      emergencyState = false;
       digitalWrite(EMERGENCY_LED, LOW);
-      Firebase.setString(firebaseData, "/smartBuilding/system/buildingStatus", "NORMAL");
-      Serial.println("✅ Building status returned to normal");
+      Serial.println("System-wide emergency state DEACTIVATED. All clear.");
+      
+      // Send "all clear" notification
+      unsigned long clearId = millis();
+      String clearPath = "/smartBuilding/alerts/" + String(clearId);
+      Firebase.setString(firebaseData, clearPath + "/type", "ALL_CLEAR");
+      Firebase.setString(firebaseData, clearPath + "/message", "Emergency condition resolved. System is now safe.");
+      
+      time_t now;
+      struct tm timeinfo;
+      time(&now);
+      localtime_r(&now, &timeinfo);
+      char timeString[64];
+      strftime(timeString, sizeof(timeString), "%Y-%m-%d %H:%M:%S", &timeinfo);
+      Firebase.setString(firebaseData, clearPath + "/timestamp", timeString);
     }
   }
-}
-
-void sendEmergencyNotification() {
-  time_t now;
-  struct tm timeinfo;
-  time(&now);
-  localtime_r(&now, &timeinfo);
-  char timeString[64];
-  strftime(timeString, sizeof(timeString), "%Y-%m-%d %H:%M:%S", &timeinfo);
-  
-  String notificationPath = "/smartBuilding/notifications/" + String(millis());
-  Firebase.setString(firebaseData, notificationPath + "/type", "BUILDING_EMERGENCY");
-  Firebase.setString(firebaseData, notificationPath + "/title", "EMERGENCY ALERT");
-  Firebase.setString(firebaseData, notificationPath + "/message", "Fire detected in building! Contact emergency services immediately!");
-  Firebase.setString(firebaseData, notificationPath + "/timestamp", timeString);
-  Firebase.setString(firebaseData, notificationPath + "/priority", "HIGH");
-  Firebase.setBool(firebaseData, notificationPath + "/sent", true);
-  
-  // Set flag for web app to show emergency alert
-  Firebase.setBool(firebaseData, "/smartBuilding/system/showEmergencyAlert", true);
-  
-  Serial.println("📢 Emergency notification sent to Firebase for web app");
-}
-
-void sendSystemInfo() {
-  time_t now;
-  struct tm timeinfo;
-  time(&now);
-  localtime_r(&now, &timeinfo);
-  char timeString[64];
-  strftime(timeString, sizeof(timeString), "%Y-%m-%d %H:%M:%S", &timeinfo);
-  
-  Firebase.setString(firebaseData, "/smartBuilding/system/startupTime", timeString);
-  Firebase.setString(firebaseData, "/smartBuilding/system/esp32Version", "2.0.0");
-  Firebase.setString(firebaseData, "/smartBuilding/system/description", "Smart Building Monitoring System - 3 Room Configuration");
-  Firebase.setInt(firebaseData, "/smartBuilding/system/totalRooms", 3);
-  
-  // Room configuration
-  Firebase.setString(firebaseData, "/smartBuilding/config/room1", "Bedroom");
-  Firebase.setString(firebaseData, "/smartBuilding/config/room2", "Kitchen");
-  Firebase.setString(firebaseData, "/smartBuilding/config/room3", "Parking Lot");
-  
-  Serial.println("📋 System information sent to Firebase");
 }
 
 // ========== HELPER FUNCTIONS ==========
@@ -895,132 +836,4 @@ String capitalizeFirst(String str) {
   String result = str;
   result[0] = toupper(result[0]);
   return result;
-}
-
-// Send contact configuration to Firebase for web app
-void sendContactConfiguration() {
-  Serial.println("📞 Sending contact configuration to Firebase...");
-  
-  String contactPath = "/smartBuilding/contacts";
-  
-  // Owner information
-  Firebase.setString(firebaseData, contactPath + "/owner/email", OWNER_EMAIL);
-  Firebase.setString(firebaseData, contactPath + "/owner/phone", OWNER_PHONE);
-  Firebase.setString(firebaseData, contactPath + "/owner/name", "Building Owner");
-  Firebase.setBool(firebaseData, contactPath + "/owner/notifyOnEmergency", true);
-  Firebase.setBool(firebaseData, contactPath + "/owner/notifyOnWarning", true);
-  
-  // Fire station information
-  Firebase.setString(firebaseData, contactPath + "/fireStation/phone", FIRE_STATION_PHONE);
-  Firebase.setString(firebaseData, contactPath + "/fireStation/name", "Fire Station");
-  Firebase.setBool(firebaseData, contactPath + "/fireStation/autoCallOnFire", true);
-  
-  // Building information
-  Firebase.setString(firebaseData, contactPath + "/building/name", BUILDING_NAME);
-  Firebase.setString(firebaseData, contactPath + "/building/address", BUILDING_ADDRESS);
-  
-  Serial.println("✅ Contact configuration sent successfully");
-}
-
-// Create notification entry in queue for web app to process
-void createNotificationEntry(unsigned long alertId, String room, String type, String timestamp, int gasLevel, bool flameDetected) {
-  String notifyPath = "/smartBuilding/notificationQueue/" + String(alertId);
-  
-  // Notification metadata
-  Firebase.setString(firebaseData, notifyPath + "/id", String(alertId));
-  Firebase.setString(firebaseData, notifyPath + "/type", type);
-  Firebase.setString(firebaseData, notifyPath + "/room", room);
-  Firebase.setString(firebaseData, notifyPath + "/timestamp", timestamp);
-  Firebase.setBool(firebaseData, notifyPath + "/processed", false);
-  Firebase.setString(firebaseData, notifyPath + "/status", "PENDING");
-  
-  // Alert details
-  Firebase.setInt(firebaseData, notifyPath + "/details/gasLevel", gasLevel);
-  Firebase.setBool(firebaseData, notifyPath + "/details/flameDetected", flameDetected);
-  
-  // Determine message and priority based on type
-  String message, title, priority;
-  bool requiresCall = false;
-  
-  if (type == "FIRE") {
-    title = "🔥 FIRE EMERGENCY!";
-    message = "CRITICAL: Fire detected in " + capitalizeFirst(room) + " of " + String(BUILDING_NAME) + 
-              ". Location: " + String(BUILDING_ADDRESS) + ". EVACUATE IMMEDIATELY!";
-    priority = "CRITICAL";
-    requiresCall = true;
-    
-    Firebase.setString(firebaseData, notifyPath + "/actions/email/subject", "🚨 FIRE EMERGENCY - " + String(BUILDING_NAME));
-    Firebase.setString(firebaseData, notifyPath + "/actions/email/body", 
-      "FIRE ALERT!\n\n" +
-      String("Building: ") + BUILDING_NAME + "\n" +
-      String("Location: ") + BUILDING_ADDRESS + "\n" +
-      String("Room: ") + capitalizeFirst(room) + "\n" +
-      String("Time: ") + timestamp + "\n" +
-      String("Gas Level: ") + String(gasLevel) + "\n\n" +
-      "ACTION REQUIRED:\n" +
-      "1. Evacuate building immediately\n" +
-      "2. Call fire station: " + String(FIRE_STATION_PHONE) + "\n" +
-      "3. Check security camera footage\n" +
-      "4. Account for all occupants\n\n" +
-      "This is an automated alert from your Smart Building Monitoring System.");
-    
-    Firebase.setString(firebaseData, notifyPath + "/actions/sms/message", 
-      "🔥 FIRE ALERT! " + capitalizeFirst(room) + " at " + String(BUILDING_NAME) + ". EVACUATE NOW! Fire Station: " + String(FIRE_STATION_PHONE));
-    
-    Firebase.setString(firebaseData, notifyPath + "/actions/call/number", FIRE_STATION_PHONE);
-    Firebase.setString(firebaseData, notifyPath + "/actions/call/message", 
-      "Emergency fire alert at " + String(BUILDING_NAME) + ", " + String(BUILDING_ADDRESS) + ". Fire detected in " + capitalizeFirst(room) + ". Please respond immediately.");
-    
-  } else if (type == "GAS") {
-    title = "⚠️ Gas/Smoke Warning";
-    message = "WARNING: High gas/smoke level (" + String(gasLevel) + ") detected in " + capitalizeFirst(room) + 
-              " of " + String(BUILDING_NAME) + ". Please investigate.";
-    priority = "HIGH";
-    requiresCall = false;
-    
-    Firebase.setString(firebaseData, notifyPath + "/actions/email/subject", "⚠️ Gas Warning - " + String(BUILDING_NAME));
-    Firebase.setString(firebaseData, notifyPath + "/actions/email/body", 
-      "Gas/Smoke Warning\n\n" +
-      String("Building: ") + BUILDING_NAME + "\n" +
-      String("Location: ") + BUILDING_ADDRESS + "\n" +
-      String("Room: ") + capitalizeFirst(room) + "\n" +
-      String("Time: ") + timestamp + "\n" +
-      String("Gas Level: ") + String(gasLevel) + " (Threshold: 300)\n\n" +
-      "RECOMMENDED ACTIONS:\n" +
-      "1. Check the affected room\n" +
-      "2. Ventilate the area\n" +
-      "3. Investigate the source\n" +
-      "4. Monitor for escalation\n\n" +
-      "This is an automated alert from your Smart Building Monitoring System.");
-    
-    Firebase.setString(firebaseData, notifyPath + "/actions/sms/message", 
-      "⚠️ GAS WARNING: High gas level (" + String(gasLevel) + ") in " + capitalizeFirst(room) + " at " + String(BUILDING_NAME) + ". Please check.");
-  }
-  
-  Firebase.setString(firebaseData, notifyPath + "/title", title);
-  Firebase.setString(firebaseData, notifyPath + "/message", message);
-  Firebase.setString(firebaseData, notifyPath + "/priority", priority);
-  
-  // Contact information
-  Firebase.setString(firebaseData, notifyPath + "/contacts/ownerEmail", OWNER_EMAIL);
-  Firebase.setString(firebaseData, notifyPath + "/contacts/ownerPhone", OWNER_PHONE);
-  Firebase.setString(firebaseData, notifyPath + "/contacts/fireStationPhone", FIRE_STATION_PHONE);
-  Firebase.setString(firebaseData, notifyPath + "/contacts/buildingName", BUILDING_NAME);
-  Firebase.setString(firebaseData, notifyPath + "/contacts/buildingAddress", BUILDING_ADDRESS);
-  
-  // Action flags
-  Firebase.setBool(firebaseData, notifyPath + "/actions/sendEmail", true);
-  Firebase.setBool(firebaseData, notifyPath + "/actions/sendSMS", true);
-  Firebase.setBool(firebaseData, notifyPath + "/actions/sendPushNotification", true);
-  Firebase.setBool(firebaseData, notifyPath + "/actions/callFireStation", requiresCall);
-  
-  // Completion tracking
-  Firebase.setBool(firebaseData, notifyPath + "/completion/emailSent", false);
-  Firebase.setBool(firebaseData, notifyPath + "/completion/smsSent", false);
-  Firebase.setBool(firebaseData, notifyPath + "/completion/pushSent", false);
-  Firebase.setBool(firebaseData, notifyPath + "/completion/callMade", false);
-  Firebase.setString(firebaseData, notifyPath + "/completion/lastAttempt", "");
-  
-  Serial.println("📬 Notification queue entry created: ID " + String(alertId));
-  Serial.println("   Type: " + type + " | Room: " + room + " | Priority: " + priority);
 }

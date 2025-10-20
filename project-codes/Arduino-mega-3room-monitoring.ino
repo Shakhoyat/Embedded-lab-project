@@ -1,5 +1,5 @@
 /*
- * Smart Building Monitoring System - Arduino Mega Code
+ * Smart Building Monitoring System - Arduino Mega Controller
  * 4 Segments: Kitchen, Bedroom, Parking, Central Gas Chamber
  * 
  * Kitchen: MQ135 sensor, DHT11, Flame Sensor, Buzzer, Red+Green LED
@@ -7,7 +7,7 @@
  * Parking: MQ2, Flame Sensor, Red+Green LED
  * Central Gas Chamber: MQ2, Buzzer
  * 
- * Data sent to ESP32 for Firebase integration and emergency alerts
+ * Sends sensor data to ESP32 for Firebase integration and emergency alerts
  */
 
 #include <DHT.h>
@@ -96,10 +96,8 @@ const unsigned long ALERT_DEBOUNCE = 5000;   // 5 second debounce for alerts
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("=== SMART BUILDING MONITORING SYSTEM ===");
-  Serial.println("4 Segments: Kitchen, Bedroom, Parking, Central Gas Chamber");
-  Serial.println("LCD Display connected to ESP32 for data visualization");
-  Serial.println("Initializing sensors and components...");
+  Serial.println("Smart Building Monitoring - Arduino Mega");
+  Serial.println("Initializing components...");
   
   // Initialize sensors
   dht.begin();
@@ -137,14 +135,8 @@ void setup() {
   digitalWrite(BUZZER_CENTRAL, LOW);
   
   delay(2000);
-  Serial.println("System initialized successfully!");
-  Serial.println("Monitoring segments:");
-  Serial.println("- Kitchen: DHT11, MQ135, Flame, Buzzer, LEDs");
-  Serial.println("- Bedroom: DS18B20, MQ2, Flame, Buzzer, LEDs");
-  Serial.println("- Parking: MQ2, Flame, LEDs");
-  Serial.println("- Central Gas: MQ2, Buzzer");
-  Serial.println("Data will be sent to ESP32 for LCD display and Firebase integration");
-  Serial.println("=====================================");
+  Serial.println("System initialized.");
+  Serial.println("Monitoring segments and sending data to ESP32.");
 }
 
 void loop() {
@@ -169,7 +161,7 @@ void loop() {
   handleSystemEmergency();
 }
 
-// ====== Read all sensors from all segments ======
+// Read all sensors from all segments
 void readAllSensors() {
   // Kitchen: DHT11 (Temperature and Humidity) + MQ135 (Air Quality)
   float h = dht.readHumidity();
@@ -215,7 +207,7 @@ void readAllSensors() {
   centralGas.airQuality = 0;
 }
 
-// ====== Analyze safety conditions for each segment ======
+// Analyze safety conditions for each segment
 void analyzeSegmentSafety() {
   unsigned long currentTime = millis();
   
@@ -263,7 +255,7 @@ void analyzeSegmentSafety() {
   }
 }
 
-// ====== Control buzzers and LEDs for all segments ======
+// Control buzzers and LEDs for all segments
 void controlAlertsAndLEDs() {
   unsigned long currentTime = millis();
   
@@ -326,7 +318,7 @@ void controlAlertsAndLEDs() {
   }
 }
 
-// ====== Send comprehensive JSON data to ESP32 ======
+// Send comprehensive JSON data to ESP32
 void sendDataToESP32() {
   StaticJsonDocument<1024> doc;
   
@@ -395,75 +387,59 @@ void sendDataToESP32() {
   dataSendCount++;
 }
 
-// ====== Print detailed system status ======
+// Print detailed system status
 void printSystemStatus() {
-  Serial.println("=================== SYSTEM STATUS ===================");
-  Serial.print("System Emergency: "); Serial.println(systemEmergency ? "YES" : "NO");
-  if (emergencyStartTime > 0) {
-    Serial.print("Emergency Duration: "); Serial.print((millis() - emergencyStartTime)/1000); Serial.println(" seconds");
-  }
+  Serial.println("\n--- System Status Report ---");
+  Serial.print("Overall Emergency: "); Serial.println(systemEmergency ? "ACTIVE" : "Normal");
   
-  Serial.println("\n--- KITCHEN (DHT11, MQ135, Flame) ---");
-  Serial.print("Temperature: "); Serial.print(kitchen.temperature,1); Serial.println("°C");
-  Serial.print("Humidity: "); Serial.print(kitchen.humidity,1); Serial.println("%");
-  Serial.print("Air Quality (MQ135): "); Serial.println(kitchen.airQuality);
-  Serial.print("Flame: "); Serial.print(kitchen.flameDetected ? "DETECTED" : "None");
-  Serial.print(" | Status: "); 
-  if (kitchen.isEmergency) Serial.println("EMERGENCY");
-  else if (kitchen.isDangerous) Serial.println("DANGEROUS");
-  else Serial.println("SAFE");
+  // Kitchen
+  Serial.print("Kitchen: ");
+  if (kitchen.isEmergency) Serial.print("EMERGENCY");
+  else if (kitchen.isDangerous) Serial.print("WARNING");
+  else Serial.print("Safe");
+  Serial.print(" | Temp: "); Serial.print(kitchen.temperature, 1);
+  Serial.print("C | Humidity: "); Serial.print(kitchen.humidity, 1);
+  Serial.print("% | Air Quality: "); Serial.print(kitchen.airQuality);
+  Serial.print(" | Flame: "); Serial.println(kitchen.flameDetected ? "Yes" : "No");
+
+  // Bedroom
+  Serial.print("Bedroom: ");
+  if (bedroom.isEmergency) Serial.print("EMERGENCY");
+  else if (bedroom.isDangerous) Serial.print("WARNING");
+  else Serial.print("Safe");
+  Serial.print(" | Temp: "); Serial.print(bedroom.temperature, 1);
+  Serial.print("C | Gas: "); Serial.print(bedroom.gasLevel);
+  Serial.print(" | Flame: "); Serial.println(bedroom.flameDetected ? "Yes" : "No");
+
+  // Parking
+  Serial.print("Parking: ");
+  if (parking.isEmergency) Serial.print("EMERGENCY");
+  else if (parking.isDangerous) Serial.print("WARNING");
+  else Serial.print("Safe");
+  Serial.print(" | Gas: "); Serial.print(parking.gasLevel);
+  Serial.print(" | Flame: "); Serial.println(parking.flameDetected ? "Yes" : "No");
+
+  // Central Gas
+  Serial.print("Central Gas: ");
+  if (centralGas.isEmergency) Serial.print("EMERGENCY");
+  else if (centralGas.isDangerous) Serial.print("WARNING");
+  else Serial.print("Safe");
+  Serial.print(" | Gas: "); Serial.println(centralGas.gasLevel);
   
-  Serial.println("\n--- BEDROOM (DS18B20, MQ2, Flame) ---");
-  Serial.print("Temperature: "); Serial.print(bedroom.temperature,1); Serial.println("°C");
-  Serial.print("Gas Level (MQ2): "); Serial.println(bedroom.gasLevel);
-  Serial.print("Flame: "); Serial.print(bedroom.flameDetected ? "DETECTED" : "None");
-  Serial.print(" | Status: ");
-  if (bedroom.isEmergency) Serial.println("EMERGENCY");
-  else if (bedroom.isDangerous) Serial.println("DANGEROUS");
-  else Serial.println("SAFE");
-  
-  Serial.println("\n--- PARKING (MQ2, Flame) ---");
-  Serial.print("Gas Level (MQ2): "); Serial.println(parking.gasLevel);
-  Serial.print("Flame: "); Serial.print(parking.flameDetected ? "DETECTED" : "None");
-  Serial.print(" | Status: ");
-  if (parking.isEmergency) Serial.println("EMERGENCY");
-  else if (parking.isDangerous) Serial.println("DANGEROUS");
-  else Serial.println("SAFE");
-  
-  Serial.println("\n--- CENTRAL GAS CHAMBER (MQ2) ---");
-  Serial.print("Gas Level (MQ2): "); Serial.println(centralGas.gasLevel);
-  Serial.print("Status: ");
-  if (centralGas.isEmergency) Serial.println("EMERGENCY");
-  else if (centralGas.isDangerous) Serial.println("DANGEROUS");
-  else Serial.println("SAFE");
-  
-  Serial.print("\nJSON Data Packets Sent: "); Serial.println(dataSendCount);
-  Serial.println("======================================================\n");
+  Serial.print("Data Packets Sent: "); Serial.println(dataSendCount);
+  Serial.println("--- End of Report ---\n");
 }
 
-// ====== Handle system-wide emergency coordination ======
+// Handle system-wide emergency coordination
 void handleSystemEmergency() {
   static bool lastEmergencyState = false;
   
   if (systemEmergency != lastEmergencyState) {
     if (systemEmergency) {
-      Serial.println("\n🚨🚨🚨 SYSTEM-WIDE EMERGENCY ACTIVATED! 🚨🚨🚨");
-      Serial.println("Emergency detected in one or more segments!");
-      Serial.println("All alerts activated - ESP32 notified for Firebase emergency protocol");
-      
-      // Flash all available LEDs in emergency pattern
-      for (int i = 0; i < 5; i++) {
-        digitalWrite(LED_RED_KITCHEN, HIGH);
-        digitalWrite(LED_RED_BEDROOM, HIGH);
-        digitalWrite(LED_RED_PARKING, HIGH);
-        delay(200);
-        digitalWrite(LED_RED_KITCHEN, LOW);
-        digitalWrite(LED_RED_BEDROOM, LOW);
-        digitalWrite(LED_RED_PARKING, LOW);
-        delay(200);
-      }
+      Serial.println("SYSTEM-WIDE EMERGENCY: At least one segment is critical.");
+      Serial.println("ESP32 notified for advanced alerting.");
     } else {
-      Serial.println("\n✅ System emergency cleared - returning to normal monitoring");
+      Serial.println("System emergency cleared. Returning to normal operation.");
     }
     lastEmergencyState = systemEmergency;
   }
