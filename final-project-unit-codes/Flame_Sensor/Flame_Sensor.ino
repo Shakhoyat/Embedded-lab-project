@@ -418,7 +418,7 @@ void initializeFirebase() {
 
 // Handle incoming JSON data message from Arduino Mega
 void handleDataMessage(String jsonStr) {
-  StaticJsonDocument<1024> doc;
+  StaticJsonDocument<2048> doc;  // Increased from 1024 to 2048 to match Arduino buffer size
   DeserializationError error = deserializeJson(doc, jsonStr);
   
   if (error) {
@@ -548,7 +548,7 @@ void processArduinoData() {
   Serial.println("Processing data from Arduino Mega (4 segments)...");
   
   // Parse JSON data
-  DynamicJsonDocument doc(1536); // Increased size for 4 segments
+  DynamicJsonDocument doc(2560); // Increased from 1536 to 2560 bytes to handle full data with thresholds
   DeserializationError error = deserializeJson(doc, receivedData);
   
   if (error) {

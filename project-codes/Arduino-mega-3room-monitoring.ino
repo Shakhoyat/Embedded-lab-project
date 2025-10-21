@@ -27,29 +27,29 @@
 // Kitchen Sensors
 #define DHT_PIN 22            // DHT11 for temperature/humidity
 #define DHT_TYPE DHT11
-#define MQ135_PIN A3          // Air quality sensor
+#define MQ135_PIN A0          // Air quality sensor 
 #define FLAME_KITCHEN 25      // Flame sensor
-#define BUZZER_KITCHEN 28     // Kitchen buzzer
-#define LED_GREEN_KITCHEN 31  // Kitchen safe indicator
-#define LED_RED_KITCHEN 34    // Kitchen danger indicator
+#define BUZZER_KITCHEN 5      // Kitchen buzzer
+#define LED_GREEN_KITCHEN 31  // Kitchen safe indicator**
+#define LED_RED_KITCHEN 34    // Kitchen danger indicator**
 
 // Bedroom Sensors  
-#define ONE_WIRE_BUS 23       // DS18B20 temperature sensor
-#define MQ2_BEDROOM A0        // Gas/smoke sensor
+#define ONE_WIRE_BUS 23       // DS18B20 temperature sensor**
+#define MQ2_BEDROOM A1        // Gas/smoke sensor
 #define FLAME_BEDROOM 24      // Flame sensor
-#define BUZZER_BEDROOM 27     // Bedroom buzzer
-#define LED_GREEN_BEDROOM 30  // Bedroom safe indicator
-#define LED_RED_BEDROOM 33    // Bedroom danger indicator
+#define BUZZER_BEDROOM 4    // Bedroom buzzer
+#define LED_GREEN_BEDROOM 30  // Bedroom safe indicator**
+#define LED_RED_BEDROOM 33    // Bedroom danger indicator**
 
 // Parking Sensors
-#define MQ2_PARKING A2        // Gas/smoke sensor
+#define MQ2_PARKING A3       // Gas/smoke sensor
 #define FLAME_PARKING 26      // Flame sensor
-#define LED_GREEN_PARKING 32  // Parking safe indicator
-#define LED_RED_PARKING 35    // Parking danger indicator
+#define LED_GREEN_PARKING 32  // Parking safe indicator**
+#define LED_RED_PARKING 35    // Parking danger indicator**
 
 // Central Gas Chamber
-#define MQ2_CENTRAL A1        // Central gas monitoring
-#define BUZZER_CENTRAL 29     // Central chamber buzzer
+#define MQ2_CENTRAL A2       // Central gas monitoring
+#define BUZZER_CENTRAL 3     // Central chamber buzzer
 
 // ========== SENSOR THRESHOLDS ==========
 #define MQ2_THRESHOLD 300      // Gas/Smoke threshold (analog)
@@ -374,7 +374,7 @@ void controlAlertsAndLEDs() {
 
 // Send comprehensive JSON data to ESP32
 void sendDataToESP32() {
-  StaticJsonDocument<1024> doc;
+  StaticJsonDocument<2048> doc;  // Increased from 1024 to 2048 bytes to accommodate all 4 segments + thresholds
   
   // System-wide information
   doc["systemEmergency"] = systemEmergency;

@@ -114,9 +114,11 @@ const int daylightOffset_sec = 0;
 void setup() {
   Serial.begin(115200);
   Serial2.begin(115200, SERIAL_8N1, RXD2, TXD2);  // Initialize Serial2 for Arduino Mega communication
+  Serial2.setRxBufferSize(4096);  // Increase RX buffer to 4KB to handle large JSON payloads
   Serial.println("Smart Building ESP32 Gateway");
   Serial.println("4 Segments: Kitchen, Bedroom, Parking, Central Gas Chamber");
   Serial.println("Serial2 initialized for Arduino Mega communication");
+  Serial.println("Serial2 RX buffer set to 4096 bytes");
   Serial.println("Initializing system...");
   
   // Initialize I2C for LCD
@@ -247,15 +249,36 @@ void loop() {
   
   // Read data from Arduino Mega via Serial2
   if (Serial2.available()) {
-    String rawData = Serial2.readStringUntil('\n');
+    // Wait a bit for complete data to arrive (important for large JSON payloads)
+    delay(50);
+    
+    // Read data character by character to avoid String buffer limitations
+    String rawData = "";
+    rawData.reserve(2500); // Pre-allocate memory for large JSON
+    
+    while (Serial2.available()) {
+      char c = Serial2.read();
+      if (c == '\n') {
+        break; // End of message
+      }
+      rawData += c;
+      
+      // Safety check to prevent infinite loop
+      if (rawData.length() > 2400) {
+        Serial.println("WARNING: Message exceeds safe buffer size, truncating");
+        break;
+      }
+    }
+    
     rawData.trim();
     
     if (rawData.length() > 0) {
-      Serial.println("Raw data from Arduino: " + rawData);
+      Serial.println("Raw data from Arduino (" + String(rawData.length()) + " bytes): " + rawData.substring(0, 100) + "...");
       
       if (rawData.startsWith("DATA:")) {
-        Serial.println("JSON data received from Arduino Mega");
+        Serial.println("JSON data received from Arduino Mega (" + String(rawData.length()) + " bytes)");
         receivedData = rawData.substring(5); // Remove "DATA:" prefix
+        Serial.println("JSON payload size: " + String(receivedData.length()) + " bytes");
         handleDataMessage(receivedData);
         processArduinoData();
         dataReceiveCount++;
@@ -418,12 +441,14 @@ void initializeFirebase() {
 
 // Handle incoming JSON data message from Arduino Mega
 void handleDataMessage(String jsonStr) {
-  StaticJsonDocument<1024> doc;
+  DynamicJsonDocument doc(3072);  // Increased to 3KB to safely handle 2048-byte Arduino payload
   DeserializationError error = deserializeJson(doc, jsonStr);
   
   if (error) {
-    Serial.print("JSON parsing error: ");
-    Serial.println(error.c_str());
+    Serial.println("ERROR: Failed to parse JSON data from Arduino");
+    Serial.println("Error: " + String(error.c_str()));
+    Serial.println("JSON Length: " + String(jsonStr.length()) + " bytes");
+    Serial.println("First 200 chars: " + jsonStr.substring(0, min(200, (int)jsonStr.length())));
     return;
   }
 
@@ -548,7 +573,7 @@ void processArduinoData() {
   Serial.println("Processing data from Arduino Mega (4 segments)...");
   
   // Parse JSON data
-  DynamicJsonDocument doc(1536); // Increased size for 4 segments
+  DynamicJsonDocument doc(2560); // Increased from 1536 to 2560 bytes to handle full data with thresholds
   DeserializationError error = deserializeJson(doc, receivedData);
   
   if (error) {

@@ -1,0 +1,52 @@
+{
+    "systemEmergency": false,
+    "timestamp": 75000,
+    "emergencyDuration": 0,
+    "environment": {
+        "globalTemperature": 32.4,
+        "globalHumidity": 66
+    },
+    "kitchen": {
+        "temperature": 32.4,
+        "humidity": 66,
+        "airQuality": 279,
+        "flameDetected": false,
+        "gasLevel": 279,
+        "isEmergency": false,
+        "isDangerous": false,
+        "sensorTypes": "DHT11,MQ135,Flame",
+        "hasComponents": "Buzzer,LEDs"
+    },
+    "bedroom": {
+        "temperature": 0,
+        "gasLevel": 274,
+        "flameDetected": false,
+        "isEmergency": false,
+        "isDangerous": true,
+        "sensorTypes": "DS18B20,MQ2,Flame",
+        "hasComponents": "Buzzer,LEDs"
+    },
+    "parking": {
+        "gasLevel": 248,
+        "flameDetected": false,
+        "isEmergency": false,
+        "isDangerous": false,
+        "sensorTypes": "MQ2,Flame",
+        "hasComponents": "LEDs"
+    },
+    "centralGas": {
+        "gasLevel": 255,
+        "isEmergency": false,
+        "isDangerous": false,
+        "sensorTypes": "MQ2",
+        "hasComponents": "Buzzer"
+    },
+    "thresholds": {
+        "mq2_warning": 300,
+        "mq2_critical": 500,
+        "mq135_warning": 400,
+        "mq135_critical": 600,
+        "temp_high": 35,
+        "temp_critical": 45
+    }
+}
