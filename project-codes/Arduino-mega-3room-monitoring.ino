@@ -7,7 +7,15 @@
  * Parking: MQ2, Flame Sensor, Red+Green LED
  * Central Gas Chamber: MQ2, Buzzer
  * 
- * Sends sensor data to ESP32 for Firebase integration and emergency alerts
+ * JSON COMMUNICATION VIA SERIAL1 (115200 baud):
+ * - INIT: Initialization complete message
+ * - DATA: Complete sensor data in JSON format
+ * - HEARTBEAT: Periodic status update
+ * - EMERGENCY_ALERT: Emergency condition detected
+ * - EMERGENCY_CLEAR: Emergency condition resolved
+ * 
+ * Serial (115200 baud) used for debugging output
+ * Serial1 (115200 baud) used for JSON data transmission to ESP32
  */
 
 #include <DHT.h>
@@ -86,18 +94,22 @@ float globalTemperature = 0;   // Average/general temperature
 float globalHumidity = 0;      // Kitchen humidity (DHT11)
 unsigned long lastSensorRead = 0;
 unsigned long lastDataSend = 0;
+unsigned long lastHeartbeat = 0;
 int dataSendCount = 0;
 bool systemEmergency = false;
 unsigned long emergencyStartTime = 0;
 
 const unsigned long SENSOR_INTERVAL = 1000;  // Read sensors every 1 second
 const unsigned long SEND_INTERVAL = 3000;    // Send data every 3 seconds
+const unsigned long HEARTBEAT_INTERVAL = 10000; // Send heartbeat every 10 seconds
 const unsigned long ALERT_DEBOUNCE = 5000;   // 5 second debounce for alerts
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(115200);  // For debugging
+  Serial1.begin(115200); // For JSON data transmission to ESP32
   Serial.println("Smart Building Monitoring - Arduino Mega");
   Serial.println("Initializing components...");
+  Serial1.println("JSON_READY"); // Signal to ESP32 that JSON data will follow
   
   // Initialize sensors
   dht.begin();
@@ -136,7 +148,43 @@ void setup() {
   
   delay(2000);
   Serial.println("System initialized.");
-  Serial.println("Monitoring segments and sending data to ESP32.");
+  Serial.println("Monitoring segments and sending JSON data to ESP32 via Serial1.");
+  
+  // Send initialization complete message to ESP32
+  sendInitializationComplete();
+}
+
+// Send initialization complete message as JSON
+void sendInitializationComplete() {
+  StaticJsonDocument<256> doc;
+  doc["messageType"] = "INIT_COMPLETE";
+  doc["timestamp"] = millis();
+  doc["deviceID"] = "ARDUINO_MEGA";
+  doc["status"] = "READY";
+  doc["segments"] = 4;
+  
+  Serial1.print("INIT:");
+  serializeJson(doc, Serial1);
+  Serial1.println();
+  
+  Serial.println("Initialization message sent to ESP32 via Serial1");
+}
+
+// Send heartbeat message as JSON to ESP32
+void sendHeartbeat() {
+  StaticJsonDocument<256> doc;
+  doc["messageType"] = "HEARTBEAT";
+  doc["timestamp"] = millis();
+  doc["deviceID"] = "ARDUINO_MEGA";
+  doc["uptime"] = millis() / 1000;
+  doc["systemEmergency"] = systemEmergency;
+  doc["dataSendCount"] = dataSendCount;
+  
+  Serial1.print("HEARTBEAT:");
+  serializeJson(doc, Serial1);
+  Serial1.println();
+  
+  Serial.println("Heartbeat sent to ESP32 - Uptime: " + String(millis() / 1000) + "s");
 }
 
 void loop() {
@@ -155,6 +203,12 @@ void loop() {
     lastDataSend = currentTime;
     sendDataToESP32();
     printSystemStatus();
+  }
+  
+  // Send heartbeat to ESP32
+  if (currentTime - lastHeartbeat >= HEARTBEAT_INTERVAL) {
+    lastHeartbeat = currentTime;
+    sendHeartbeat();
   }
   
   // Handle system-wide emergency state
@@ -380,14 +434,20 @@ void sendDataToESP32() {
   thresholds["temp_high"] = TEMP_THRESHOLD_HIGH;
   thresholds["temp_critical"] = TEMP_CRITICAL;
   
-  // Serialize and send with DATA: prefix for ESP32 parsing
-  Serial.print("DATA:");
+  // Serialize and send JSON data to Serial1 for ESP32
+  Serial1.print("DATA:");
+  serializeJson(doc, Serial1);
+  Serial1.println(); // newline as message delimiter
+  
+  // Also send to Serial for debugging (optional)
+  Serial.print("DEBUG_DATA:");
   serializeJson(doc, Serial);
-  Serial.println(); // newline as message delimiter
+  Serial.println();
+  
   dataSendCount++;
 }
 
-// Print detailed system status
+// Print detailed system status to Serial (for debugging)
 void printSystemStatus() {
   Serial.println("\n--- System Status Report ---");
   Serial.print("Overall Emergency: "); Serial.println(systemEmergency ? "ACTIVE" : "Normal");
@@ -438,8 +498,12 @@ void handleSystemEmergency() {
     if (systemEmergency) {
       Serial.println("SYSTEM-WIDE EMERGENCY: At least one segment is critical.");
       Serial.println("ESP32 notified for advanced alerting.");
+      // Send emergency alert via Serial1 as JSON
+      Serial1.println("EMERGENCY_ALERT:SYSTEM_EMERGENCY_DETECTED");
     } else {
       Serial.println("System emergency cleared. Returning to normal operation.");
+      // Send all-clear message via Serial1 as JSON
+      Serial1.println("EMERGENCY_CLEAR:SYSTEM_NORMAL");
     }
     lastEmergencyState = systemEmergency;
   }

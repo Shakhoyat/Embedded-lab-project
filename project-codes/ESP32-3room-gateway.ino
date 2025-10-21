@@ -1,6 +1,6 @@
 /*
  * Smart Building Monitoring System - ESP32 Gateway
- * Receives data from Arduino Mega (4 segments) and manages Firebase integration
+ * Receives JSON data from Arduino Mega (4 segments) via Serial2 and manages Firebase integration
  * 
  * Segments monitored:
  * - Kitchen: DHT11, MQ135, Flame Sensor, Buzzer, LEDs
@@ -8,12 +8,18 @@
  * - Parking: MQ2, Flame Sensor, LEDs
  * - Central Gas Chamber: MQ2, Buzzer
  * 
+ * COMMUNICATION:
+ * - Serial2 (pins 16/17): Bidirectional JSON communication with Arduino Mega
+ * - Receives: DATA, INIT, HEARTBEAT, EMERGENCY_ALERT, EMERGENCY_CLEAR messages
+ * - Sends: ACK, STATUS, FB_STATUS responses
+ * 
  * Features:
  * - WiFi connectivity and Firebase integration
  * - LCD display with cyclic segment data visualization
  * - Emergency alert system with KUET fire brigade notification
  * - Admin and caretaker alerting system
  * - Real-time monitoring and data logging
+ * - Bidirectional Arduino communication with acknowledgments
  */
 
 #include <WiFi.h>
@@ -45,6 +51,10 @@ const char* WIFI_PASSWORD = "12104053";   // Replace with your WiFi password
 #define STATUS_LED 2      // Built-in LED for connection status
 #define EMERGENCY_LED 4   // External LED for emergency indication
 #define WIFI_LED 5        // LED for WiFi status
+
+// Serial2 pins for Arduino Mega communication
+#define RXD2 16
+#define TXD2 17
 
 // LCD Display (I2C) - Connected to ESP32
 #define LCD_ADDRESS 0x27
@@ -103,8 +113,10 @@ const int daylightOffset_sec = 0;
 
 void setup() {
   Serial.begin(115200);
+  Serial2.begin(115200, SERIAL_8N1, RXD2, TXD2);  // Initialize Serial2 for Arduino Mega communication
   Serial.println("Smart Building ESP32 Gateway");
   Serial.println("4 Segments: Kitchen, Bedroom, Parking, Central Gas Chamber");
+  Serial.println("Serial2 initialized for Arduino Mega communication");
   Serial.println("Initializing system...");
   
   // Initialize I2C for LCD
@@ -207,7 +219,11 @@ void setup() {
   
   Serial.println("ESP32 Gateway ready to receive data from Arduino Mega");
   Serial.println("LCD Display: Cycling through segment data every 3 seconds");
+  Serial.println("Serial2 communication active on pins RX:" + String(RXD2) + ", TX:" + String(TXD2));
   Serial.println("Waiting for sensor data...");
+  
+  // Send ready signal to Arduino Mega
+  Serial2.println("ESP32_READY");
 }
 
 void loop() {
@@ -229,19 +245,45 @@ void loop() {
     currentLCDSegment = (currentLCDSegment + 1) % 5; // 0: system, 1: kitchen, 2: bedroom, 3: parking, 4: central
   }
   
-  // Read data from Arduino Mega
-  if (Serial.available()) {
-    String incomingData = Serial.readString();
-    incomingData.trim();
+  // Read data from Arduino Mega via Serial2
+  if (Serial2.available()) {
+    String rawData = Serial2.readStringUntil('\n');
+    rawData.trim();
     
-    if (incomingData.startsWith("DATA:")) {
-      Serial.println("Data received from Arduino Mega");
-      receivedData = incomingData.substring(5); // Remove "DATA:" prefix
-      processArduinoData();
-      dataReceiveCount++;
-      Serial.println("Total data packets received: " + String(dataReceiveCount));
-    } else if (incomingData.length() > 0) {
-      Serial.println("Arduino Debug: " + incomingData);
+    if (rawData.length() > 0) {
+      Serial.println("Raw data from Arduino: " + rawData);
+      
+      if (rawData.startsWith("DATA:")) {
+        Serial.println("JSON data received from Arduino Mega");
+        receivedData = rawData.substring(5); // Remove "DATA:" prefix
+        handleDataMessage(receivedData);
+        processArduinoData();
+        dataReceiveCount++;
+        sendAckToArduino("DATA"); // Send acknowledgment
+        Serial.println("Total data packets received: " + String(dataReceiveCount));
+      } 
+      else if (rawData.startsWith("INIT:")) {
+        Serial.println("Arduino initialization message received");
+        handleInitMessage(rawData.substring(5));
+        sendAckToArduino("INIT");
+        notifyArduinoFirebaseStatus(); // Send Firebase status
+      }
+      else if (rawData.startsWith("HEARTBEAT:")) {
+        Serial.println("Arduino heartbeat received");
+        handleHeartbeatMessage(rawData.substring(10));
+        sendAckToArduino("HEARTBEAT");
+      }
+      else if (rawData.startsWith("EMERGENCY_ALERT:")) {
+        Serial.println("Emergency alert from Arduino: " + rawData.substring(16));
+        handleEmergencyMessage(rawData.substring(16));
+      }
+      else if (rawData.startsWith("EMERGENCY_CLEAR:")) {
+        Serial.println("Emergency cleared from Arduino: " + rawData.substring(16));
+        handleEmergencyClear(rawData.substring(16));
+      }
+      else {
+        Serial.println("Arduino Debug: " + rawData);
+      }
     }
   }
   
@@ -249,6 +291,7 @@ void loop() {
   if (currentTime - lastHeartbeat >= 30000) {
     Serial.println("Sending heartbeat to Firebase...");
     sendHeartbeat();
+    sendStatusToArduino(); // Also send status to Arduino
     lastHeartbeat = currentTime;
   }
   
@@ -371,6 +414,134 @@ void initializeFirebase() {
     Serial.println("4. Check database rules (should allow read/write)");
     Serial.println("5. Try using Web API Key instead of database secret");
   }
+}
+
+// Handle incoming JSON data message from Arduino Mega
+void handleDataMessage(String jsonStr) {
+  StaticJsonDocument<1024> doc;
+  DeserializationError error = deserializeJson(doc, jsonStr);
+  
+  if (error) {
+    Serial.print("JSON parsing error: ");
+    Serial.println(error.c_str());
+    return;
+  }
+
+  // Extract and print key variables for debugging
+  bool emergency = doc["systemEmergency"];
+  float gTemp = doc["environment"]["globalTemperature"];
+  float gHum = doc["environment"]["globalHumidity"];
+
+  float kitchenTemp = doc["kitchen"]["temperature"];
+  bool kitchenFlame = doc["kitchen"]["flameDetected"];
+
+  float bedroomTemp = doc["bedroom"]["temperature"];
+  int bedroomGas = doc["bedroom"]["gasLevel"];
+
+  int parkingGas = doc["parking"]["gasLevel"];
+  bool parkingFlame = doc["parking"]["flameDetected"];
+
+  int centralGas = doc["centralGas"]["gasLevel"];
+
+  // Print variable values for monitoring
+  Serial.println("=== Arduino Data Variables ===");
+  Serial.println("emergency: " + String(emergency));
+  Serial.println("globalTemp: " + String(gTemp));
+  Serial.println("globalHumidity: " + String(gHum));
+  Serial.println("kitchenTemp: " + String(kitchenTemp));
+  Serial.println("kitchenFlame: " + String(kitchenFlame));
+  Serial.println("bedroomTemp: " + String(bedroomTemp));
+  Serial.println("bedroomGas: " + String(bedroomGas));
+  Serial.println("parkingGas: " + String(parkingGas));
+  Serial.println("parkingFlame: " + String(parkingFlame));
+  Serial.println("centralGas: " + String(centralGas));
+  Serial.println("===============================");
+}
+
+// Handle Arduino initialization message
+void handleInitMessage(String jsonStr) {
+  StaticJsonDocument<256> doc;
+  DeserializationError error = deserializeJson(doc, jsonStr);
+  
+  if (!error) {
+    String deviceID = doc["deviceID"];
+    String status = doc["status"];
+    int segments = doc["segments"];
+    
+    Serial.println("Arduino Mega initialized: " + deviceID);
+    Serial.println("Status: " + status + ", Segments: " + String(segments));
+    
+    // Send acknowledgment to Firebase
+    if (firebaseConnected) {
+      Firebase.setString(firebaseData, "/smartBuilding/system/arduinoStatus", status);
+      Firebase.setString(firebaseData, "/smartBuilding/system/arduinoDevice", deviceID);
+      Firebase.setInt(firebaseData, "/smartBuilding/system/segmentCount", segments);
+    }
+  }
+}
+
+// Handle Arduino heartbeat message
+void handleHeartbeatMessage(String jsonStr) {
+  StaticJsonDocument<256> doc;
+  DeserializationError error = deserializeJson(doc, jsonStr);
+  
+  if (!error) {
+    String deviceID = doc["deviceID"];
+    unsigned long uptime = doc["uptime"];
+    bool sysEmergency = doc["systemEmergency"];
+    int dataCount = doc["dataSendCount"];
+    
+    Serial.println("Arduino heartbeat - Uptime: " + String(uptime) + "s, Data count: " + String(dataCount));
+    
+    // Update Firebase with Arduino heartbeat info
+    if (firebaseConnected) {
+      Firebase.setInt(firebaseData, "/smartBuilding/system/arduinoUptime", uptime);
+      Firebase.setInt(firebaseData, "/smartBuilding/system/arduinoDataCount", dataCount);
+      Firebase.setBool(firebaseData, "/smartBuilding/system/arduinoEmergency", sysEmergency);
+      Firebase.setString(firebaseData, "/smartBuilding/system/lastArduinoHeartbeat", getFormattedTime());
+    }
+  }
+}
+
+// Handle emergency alert from Arduino
+void handleEmergencyMessage(String message) {
+  Serial.println("EMERGENCY ALERT: " + message);
+  
+  // Create immediate emergency alert in Firebase
+  if (firebaseConnected) {
+    unsigned long alertId = millis();
+    String alertPath = "/smartBuilding/alerts/" + String(alertId);
+    
+    Firebase.setString(firebaseData, alertPath + "/type", "ARDUINO_EMERGENCY");
+    Firebase.setString(firebaseData, alertPath + "/message", message);
+    Firebase.setString(firebaseData, alertPath + "/timestamp", getFormattedTime());
+    Firebase.setBool(firebaseData, alertPath + "/acknowledged", false);
+    Firebase.setString(firebaseData, alertPath + "/source", "Arduino_Mega");
+  }
+  
+  // Activate emergency LED
+  digitalWrite(EMERGENCY_LED, HIGH);
+  emergencyState = true;
+}
+
+// Handle emergency clear from Arduino
+void handleEmergencyClear(String message) {
+  Serial.println("EMERGENCY CLEARED: " + message);
+  
+  // Send all-clear to Firebase
+  if (firebaseConnected) {
+    unsigned long clearId = millis();
+    String clearPath = "/smartBuilding/alerts/" + String(clearId);
+    
+    Firebase.setString(firebaseData, clearPath + "/type", "ALL_CLEAR");
+    Firebase.setString(firebaseData, clearPath + "/message", "Arduino reports: " + message);
+    Firebase.setString(firebaseData, clearPath + "/timestamp", getFormattedTime());
+    Firebase.setString(firebaseData, clearPath + "/source", "Arduino_Mega");
+  }
+  
+  // Turn off emergency LED
+  digitalWrite(EMERGENCY_LED, LOW);
+  emergencyState = false;
 }
 
 void processArduinoData() {
@@ -836,4 +1007,45 @@ String capitalizeFirst(String str) {
   String result = str;
   result[0] = toupper(result[0]);
   return result;
+}
+
+// Send status update to Arduino Mega via Serial2
+void sendStatusToArduino() {
+  StaticJsonDocument<256> statusDoc;
+  statusDoc["messageType"] = "ESP32_STATUS";
+  statusDoc["timestamp"] = millis();
+  statusDoc["wifiConnected"] = (WiFi.status() == WL_CONNECTED);
+  statusDoc["firebaseConnected"] = firebaseConnected;
+  statusDoc["emergencyState"] = emergencyState;
+  statusDoc["uptime"] = millis() / 1000;
+  
+  Serial2.print("STATUS:");
+  serializeJson(statusDoc, Serial2);
+  Serial2.println();
+  
+  Serial.println("Status sent to Arduino Mega");
+}
+
+// Send acknowledgment to Arduino for received data
+void sendAckToArduino(String messageType) {
+  StaticJsonDocument<128> ackDoc;
+  ackDoc["messageType"] = "ACK";
+  ackDoc["received"] = messageType;
+  ackDoc["timestamp"] = millis();
+  
+  Serial2.print("ACK:");
+  serializeJson(ackDoc, Serial2);
+  Serial2.println();
+}
+
+// Send Firebase connection status to Arduino
+void notifyArduinoFirebaseStatus() {
+  StaticJsonDocument<128> fbDoc;
+  fbDoc["messageType"] = "FIREBASE_STATUS";
+  fbDoc["connected"] = firebaseConnected;
+  fbDoc["timestamp"] = millis();
+  
+  Serial2.print("FB_STATUS:");
+  serializeJson(fbDoc, Serial2);
+  Serial2.println();
 }
