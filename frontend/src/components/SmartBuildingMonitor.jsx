@@ -11,11 +11,14 @@ function SmartBuildingMonitor() {
     const [segments, setSegments] = useState({});
     const [alerts, setAlerts] = useState([]);
     const [emergencyNotifications, setEmergencyNotifications] = useState([]);
+    const [thresholds, setThresholds] = useState(null);
+    const [buildingInfo, setBuildingInfo] = useState(null);
     const [loading, setLoading] = useState(true);
     const [lastUpdate, setLastUpdate] = useState(null);
     const [notificationPermission, setNotificationPermission] = useState('default');
     const [connectionStatus, setConnectionStatus] = useState('connecting');
     const [selectedSegment, setSelectedSegment] = useState(null);
+    const [showDebugPanel, setShowDebugPanel] = useState(false);
     const audioRef = useRef(null);
 
     // Request notification permission
@@ -32,38 +35,73 @@ function SmartBuildingMonitor() {
         const systemRef = ref(database, 'smartBuilding/system');
         const segmentsRef = ref(database, 'smartBuilding/segments');
         const alertsRef = ref(database, 'smartBuilding/alerts');
+        const warningsRef = ref(database, 'smartBuilding/warnings');
         const emergencyRef = ref(database, 'smartBuilding/emergency_notifications');
+        const thresholdsRef = ref(database, 'smartBuilding/config/thresholds');
+        const buildingInfoRef = ref(database, 'smartBuilding/system/info');
 
         const unsubscribeSystem = onValue(systemRef, (snapshot) => {
             setSystemData(snapshot.val() || null);
             setLastUpdate(new Date());
             setConnectionStatus('connected');
             setLoading(false);
-        }, () => {
+        }, (error) => {
+            console.error('Firebase system data error:', error);
             setConnectionStatus('error');
             setLoading(false);
         });
 
         const unsubscribeSegments = onValue(segmentsRef, (snapshot) => {
-            setSegments(snapshot.val() || {});
+            const segmentData = snapshot.val() || {};
+            console.log('Segment data received:', segmentData);
+            setSegments(segmentData);
+        }, (error) => {
+            console.error('Firebase segments error:', error);
         });
 
+        // Listen to both alerts and warnings
         const unsubscribeAlerts = onValue(alertsRef, (snapshot) => {
             const data = snapshot.val();
             if (data) {
                 const alertsArray = Object.entries(data)
-                    .map(([id, alert]) => ({ id, ...alert }))
-                    .sort((a, b) => b.id - a.id)
+                    .map(([id, alert]) => ({ id, ...alert, type: alert.type || 'EMERGENCY' }))
+                    .sort((a, b) => parseInt(b.id) - parseInt(a.id))
                     .slice(0, 15);
-                setAlerts(alertsArray);
+
+                setAlerts(prev => {
+                    const combined = [...alertsArray];
+                    return combined;
+                });
 
                 alertsArray.forEach(alert => {
-                    if (alert.type === 'EMERGENCY' && !alert.acknowledged) {
+                    if ((alert.type === 'EMERGENCY' || alert.type === 'ARDUINO_EMERGENCY') && !alert.acknowledged) {
                         showBrowserNotification(alert);
                         playAlertSound();
                     }
                 });
             }
+        }, (error) => {
+            console.error('Firebase alerts error:', error);
+        });
+
+        // Listen to warnings separately and merge with alerts
+        const unsubscribeWarnings = onValue(warningsRef, (snapshot) => {
+            const data = snapshot.val();
+            if (data) {
+                const warningsArray = Object.entries(data)
+                    .map(([id, warning]) => ({ id, ...warning, type: 'WARNING' }))
+                    .sort((a, b) => parseInt(b.id) - parseInt(a.id))
+                    .slice(0, 10);
+
+                setAlerts(prev => {
+                    // Merge alerts and warnings, remove duplicates, sort by timestamp
+                    const alertsOnly = prev.filter(item => item.type !== 'WARNING');
+                    const combined = [...alertsOnly, ...warningsArray];
+                    return combined.sort((a, b) => parseInt(b.id) - parseInt(a.id)).slice(0, 15);
+                });
+            }
+        }, (error) => {
+            console.error('Firebase warnings error:', error);
         });
 
         const unsubscribeEmergency = onValue(emergencyRef, (snapshot) => {
@@ -71,17 +109,44 @@ function SmartBuildingMonitor() {
             if (data) {
                 const emergencyArray = Object.entries(data)
                     .map(([id, notification]) => ({ id, ...notification }))
-                    .sort((a, b) => b.id - a.id)
+                    .sort((a, b) => parseInt(b.id) - parseInt(a.id))
                     .slice(0, 5);
                 setEmergencyNotifications(emergencyArray);
             }
+        }, (error) => {
+            console.error('Firebase emergency notifications error:', error);
+        });
+
+        // Listen to thresholds for dynamic threshold display
+        const unsubscribeThresholds = onValue(thresholdsRef, (snapshot) => {
+            const thresholdData = snapshot.val();
+            if (thresholdData) {
+                setThresholds(thresholdData);
+                console.log('Thresholds loaded:', thresholdData);
+            }
+        }, (error) => {
+            console.error('Firebase thresholds error:', error);
+        });
+
+        // Listen to building info
+        const unsubscribeBuildingInfo = onValue(buildingInfoRef, (snapshot) => {
+            const infoData = snapshot.val();
+            if (infoData) {
+                setBuildingInfo(infoData);
+                console.log('Building info loaded:', infoData);
+            }
+        }, (error) => {
+            console.error('Firebase building info error:', error);
         });
 
         return () => {
             unsubscribeSystem();
             unsubscribeSegments();
             unsubscribeAlerts();
+            unsubscribeWarnings();
             unsubscribeEmergency();
+            unsubscribeThresholds();
+            unsubscribeBuildingInfo();
         };
     }, []);
 
@@ -116,9 +181,46 @@ function SmartBuildingMonitor() {
     };
 
     const getMetricColor = (value, thresholds) => {
+        if (!thresholds) return 'text-blue-600 bg-blue-50 border-blue-200';
         if (value >= thresholds.critical) return 'text-red-600 bg-red-50 border-red-200';
         if (value >= thresholds.warning) return 'text-orange-600 bg-orange-50 border-orange-200';
         return 'text-emerald-600 bg-emerald-50 border-emerald-200';
+    };
+
+    // Dynamic thresholds based on sensor type and Firebase config
+    const getThresholdsForMetric = (metricType, segmentName) => {
+        if (!thresholds) {
+            // Fallback thresholds if Firebase thresholds not loaded
+            const fallbackThresholds = {
+                temperature: { warning: 35, critical: 45 },
+                humidity: { warning: 70, critical: 85 },
+                gas: { warning: 300, critical: 500 },
+                airQuality: { warning: 400, critical: 600 }
+            };
+            return fallbackThresholds[metricType] || { warning: 100, critical: 200 };
+        }
+
+        switch (metricType) {
+            case 'temperature':
+                return {
+                    warning: thresholds.temp_high || 35,
+                    critical: thresholds.temp_critical || 45
+                };
+            case 'gas':
+                return {
+                    warning: thresholds.mq2_warning || 300,
+                    critical: thresholds.mq2_critical || 500
+                };
+            case 'airQuality':
+                return {
+                    warning: thresholds.mq135_warning || 400,
+                    critical: thresholds.mq135_critical || 600
+                };
+            case 'humidity':
+                return { warning: 70, critical: 85 }; // No specific threshold from Arduino
+            default:
+                return { warning: 100, critical: 200 };
+        }
     };
 
     const MetricCard = ({ label, value, unit, icon, thresholds }) => {
@@ -173,44 +275,56 @@ function SmartBuildingMonitor() {
                 {/* Content */}
                 <div className="p-6 bg-gradient-to-b from-gray-50 to-white">
                     <div className="grid grid-cols-2 gap-4">
-                        {segment?.temperature > 0 && (
+                        {/* Temperature - Show for segments that have temperature data */}
+                        {(segment?.temperature !== undefined && segment?.temperature !== 0) && (
                             <MetricCard
                                 label="Temperature"
                                 value={segment.temperature}
                                 unit="°C"
                                 icon="🌡️"
-                                thresholds={{ warning: 35, critical: 45 }}
+                                thresholds={getThresholdsForMetric('temperature', name)}
                             />
                         )}
 
-                        {segment?.humidity > 0 && (
+                        {/* Humidity - Only for Kitchen (DHT11 sensor) */}
+                        {name === 'Kitchen' && segment?.humidity !== undefined && segment?.humidity > 0 && (
                             <MetricCard
                                 label="Humidity"
                                 value={segment.humidity}
                                 unit="%"
                                 icon="💧"
-                                thresholds={{ warning: 70, critical: 85 }}
+                                thresholds={getThresholdsForMetric('humidity', name)}
                             />
                         )}
 
-                        {segment?.gasLevel > 0 && (
+                        {/* Gas Level - For Bedroom, Parking, Central Gas (MQ2 sensors) */}
+                        {(name !== 'Kitchen' && segment?.gasLevel !== undefined && segment?.gasLevel >= 0) && (
                             <MetricCard
                                 label="Gas Level"
                                 value={segment.gasLevel}
                                 unit="PPM"
                                 icon="💨"
-                                thresholds={{ warning: 300, critical: 500 }}
+                                thresholds={getThresholdsForMetric('gas', name)}
                             />
                         )}
 
-                        {segment?.airQuality > 0 && (
+                        {/* Air Quality - Only for Kitchen (MQ135 sensor) */}
+                        {name === 'Kitchen' && segment?.airQuality !== undefined && segment?.airQuality >= 0 && (
                             <MetricCard
                                 label="Air Quality"
                                 value={segment.airQuality}
                                 unit="PPM"
                                 icon="🍃"
-                                thresholds={{ warning: 400, critical: 600 }}
+                                thresholds={getThresholdsForMetric('airQuality', name)}
                             />
+                        )}
+
+                        {/* Show message if no sensor data available */}
+                        {!segment && (
+                            <div className="col-span-2 text-center py-4 text-gray-500">
+                                <p className="text-sm">No sensor data available</p>
+                                <p className="text-xs mt-1">Waiting for Arduino data...</p>
+                            </div>
                         )}
                     </div>
 
@@ -258,24 +372,32 @@ function SmartBuildingMonitor() {
                             </div>
                             <div>
                                 <h1 className="text-2xl font-bold text-white tracking-tight">Smart Building Monitor</h1>
-                                <p className="text-sm text-blue-200">{systemData?.info?.buildingName || 'KUET Smart Apartment Complex'}</p>
+                                <p className="text-sm text-blue-200">{buildingInfo?.buildingName || systemData?.info?.buildingName || 'KUET Smart Apartment Complex'}</p>
                             </div>
                         </div>
 
                         <div className="flex items-center space-x-4">
                             {/* Connection Status */}
                             <div className={`flex items-center space-x-2 px-4 py-2 rounded-full ${connectionStatus === 'connected' ? 'bg-emerald-500/20 border border-emerald-400/50' :
-                                    connectionStatus === 'error' ? 'bg-red-500/20 border border-red-400/50' :
-                                        'bg-yellow-500/20 border border-yellow-400/50'
+                                connectionStatus === 'error' ? 'bg-red-500/20 border border-red-400/50' :
+                                    'bg-yellow-500/20 border border-yellow-400/50'
                                 }`}>
                                 <div className={`w-2 h-2 rounded-full ${connectionStatus === 'connected' ? 'bg-emerald-400 animate-pulse' :
-                                        connectionStatus === 'error' ? 'bg-red-400' :
-                                            'bg-yellow-400 animate-pulse'
+                                    connectionStatus === 'error' ? 'bg-red-400' :
+                                        'bg-yellow-400 animate-pulse'
                                     }`}></div>
                                 <span className="text-white text-sm font-medium">
                                     {connectionStatus === 'connected' ? 'Live' : connectionStatus === 'error' ? 'Error' : 'Connecting'}
                                 </span>
                             </div>
+
+                            {/* Debug Panel Toggle */}
+                            <button
+                                onClick={() => setShowDebugPanel(!showDebugPanel)}
+                                className="bg-blue-600/20 hover:bg-blue-600/40 px-4 py-2 rounded-full border border-blue-400/50 text-white text-sm font-medium transition-all"
+                            >
+                                🔧 Debug
+                            </button>
 
                             {/* System Status Badge */}
                             {systemData?.systemEmergency ? (
@@ -299,6 +421,53 @@ function SmartBuildingMonitor() {
             </div>
 
             <div className="max-w-7xl mx-auto px-6 py-8">
+                {/* Debug Panel */}
+                {showDebugPanel && (
+                    <div className="mb-8 bg-gray-900/80 backdrop-blur-xl border border-gray-600 rounded-2xl p-6 shadow-2xl">
+                        <h2 className="text-xl font-bold text-white mb-4 flex items-center space-x-3">
+                            <span className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">🔧</span>
+                            <span>Debug Panel - Firebase Data Structure</span>
+                        </h2>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                            <div className="bg-black/40 p-4 rounded-lg">
+                                <h3 className="text-green-400 font-bold mb-2">System Data:</h3>
+                                <pre className="text-green-200 overflow-auto max-h-40">
+                                    {JSON.stringify(systemData, null, 2)}
+                                </pre>
+                            </div>
+
+                            <div className="bg-black/40 p-4 rounded-lg">
+                                <h3 className="text-yellow-400 font-bold mb-2">Segments Data:</h3>
+                                <pre className="text-yellow-200 overflow-auto max-h-40">
+                                    {JSON.stringify(segments, null, 2)}
+                                </pre>
+                            </div>
+
+                            <div className="bg-black/40 p-4 rounded-lg">
+                                <h3 className="text-purple-400 font-bold mb-2">Thresholds:</h3>
+                                <pre className="text-purple-200 overflow-auto max-h-40">
+                                    {JSON.stringify(thresholds, null, 2)}
+                                </pre>
+                            </div>
+
+                            <div className="bg-black/40 p-4 rounded-lg">
+                                <h3 className="text-blue-400 font-bold mb-2">Building Info:</h3>
+                                <pre className="text-blue-200 overflow-auto max-h-40">
+                                    {JSON.stringify(buildingInfo, null, 2)}
+                                </pre>
+                            </div>
+                        </div>
+
+                        <div className="mt-4 bg-black/40 p-4 rounded-lg">
+                            <h3 className="text-red-400 font-bold mb-2">Recent Alerts ({alerts.length}):</h3>
+                            <pre className="text-red-200 overflow-auto max-h-32 text-xs">
+                                {JSON.stringify(alerts.slice(0, 3), null, 2)}
+                            </pre>
+                        </div>
+                    </div>
+                )}
+
                 {/* System Overview Cards */}
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
                     <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl p-6 shadow-xl text-white">
@@ -321,11 +490,11 @@ function SmartBuildingMonitor() {
 
                     <div className="bg-gradient-to-br from-purple-500 to-purple-600 rounded-xl p-6 shadow-xl text-white">
                         <div className="flex items-center justify-between mb-2">
-                            <span className="text-sm font-semibold uppercase tracking-wide opacity-90">Uptime</span>
-                            <span className="text-3xl">⏱️</span>
+                            <span className="text-sm font-semibold uppercase tracking-wide opacity-90">Data Packets</span>
+                            <span className="text-3xl">📦</span>
                         </div>
-                        <div className="text-4xl font-bold">{Math.floor((systemData?.uptime || 0) / 60)}</div>
-                        <div className="text-xs mt-2 opacity-75">Minutes Online</div>
+                        <div className="text-4xl font-bold">{systemData?.dataReceiveCount || 0}</div>
+                        <div className="text-xs mt-2 opacity-75">From Arduino</div>
                     </div>
 
                     <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 rounded-xl p-6 shadow-xl text-white">
@@ -399,10 +568,10 @@ function SmartBuildingMonitor() {
                                 <div
                                     key={alert.id}
                                     className={`rounded-xl p-5 border-2 backdrop-blur-sm transition-all hover:scale-[1.02] ${alert.type === 'EMERGENCY'
-                                            ? 'bg-red-900/30 border-red-500/50 hover:bg-red-900/40'
-                                            : alert.type === 'ALL_CLEAR'
-                                                ? 'bg-emerald-900/30 border-emerald-500/50 hover:bg-emerald-900/40'
-                                                : 'bg-orange-900/30 border-orange-500/50 hover:bg-orange-900/40'
+                                        ? 'bg-red-900/30 border-red-500/50 hover:bg-red-900/40'
+                                        : alert.type === 'ALL_CLEAR'
+                                            ? 'bg-emerald-900/30 border-emerald-500/50 hover:bg-emerald-900/40'
+                                            : 'bg-orange-900/30 border-orange-500/50 hover:bg-orange-900/40'
                                         }`}
                                     style={{ animationDelay: `${index * 50}ms` }}
                                 >
@@ -410,10 +579,10 @@ function SmartBuildingMonitor() {
                                         <div className="flex-1">
                                             <div className="flex items-center space-x-3 mb-2">
                                                 <span className={`px-4 py-1.5 rounded-full text-xs font-bold shadow-lg ${alert.type === 'EMERGENCY'
-                                                        ? 'bg-red-600 text-white'
-                                                        : alert.type === 'ALL_CLEAR'
-                                                            ? 'bg-emerald-600 text-white'
-                                                            : 'bg-orange-600 text-white'
+                                                    ? 'bg-red-600 text-white'
+                                                    : alert.type === 'ALL_CLEAR'
+                                                        ? 'bg-emerald-600 text-white'
+                                                        : 'bg-orange-600 text-white'
                                                     }`}>
                                                     {alert.type}
                                                 </span>
