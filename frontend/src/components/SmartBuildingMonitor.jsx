@@ -6,7 +6,12 @@ import { ref, onValue } from 'firebase/database';
  * Professional Smart Building Monitoring Dashboard
  * Enterprise-grade monitoring for 4 segments: Kitchen, Bedroom, Parking, Central Gas Chamber
  */
-function SmartBuildingMonitor() {
+function SmartBuildingMonitor({
+    onAlertsChange,
+    onEmergencyNotificationsChange,
+    onSegmentsChange,
+    onSystemEmergencyChange
+}) {
     const [systemData, setSystemData] = useState(null);
     const [segments, setSegments] = useState({});
     const [alerts, setAlerts] = useState([]);
@@ -41,10 +46,16 @@ function SmartBuildingMonitor() {
         const buildingInfoRef = ref(database, 'smartBuilding/system/info');
 
         const unsubscribeSystem = onValue(systemRef, (snapshot) => {
-            setSystemData(snapshot.val() || null);
+            const data = snapshot.val() || null;
+            setSystemData(data);
             setLastUpdate(new Date());
             setConnectionStatus('connected');
             setLoading(false);
+
+            // Notify parent component of system emergency change
+            if (onSystemEmergencyChange && data) {
+                onSystemEmergencyChange(data.systemEmergency || false);
+            }
         }, (error) => {
             console.error('Firebase system data error:', error);
             setConnectionStatus('error');
@@ -55,6 +66,11 @@ function SmartBuildingMonitor() {
             const segmentData = snapshot.val() || {};
             console.log('Segment data received:', segmentData);
             setSegments(segmentData);
+
+            // Notify parent component of segments change
+            if (onSegmentsChange) {
+                onSegmentsChange(segmentData);
+            }
         }, (error) => {
             console.error('Firebase segments error:', error);
         });
@@ -70,6 +86,12 @@ function SmartBuildingMonitor() {
 
                 setAlerts(prev => {
                     const combined = [...alertsArray];
+
+                    // Notify parent component of alerts change
+                    if (onAlertsChange) {
+                        onAlertsChange(combined);
+                    }
+
                     return combined;
                 });
 
@@ -112,6 +134,11 @@ function SmartBuildingMonitor() {
                     .sort((a, b) => parseInt(b.id) - parseInt(a.id))
                     .slice(0, 5);
                 setEmergencyNotifications(emergencyArray);
+
+                // Notify parent component of emergency notifications change
+                if (onEmergencyNotificationsChange) {
+                    onEmergencyNotificationsChange(emergencyArray);
+                }
             }
         }, (error) => {
             console.error('Firebase emergency notifications error:', error);
@@ -297,10 +324,55 @@ function SmartBuildingMonitor() {
                             />
                         )}
 
-                        {/* Gas Level - For Bedroom, Parking, Central Gas (MQ2 sensors) */}
-                        {(name !== 'Kitchen' && segment?.gasLevel !== undefined && segment?.gasLevel >= 0) && (
+                        {/* Gas Level Display - Different sensors for different segments */}
+                        {/* Kitchen: MQ135 sensor (Air Quality/Gas) */}
+                        {name === 'Kitchen' && segment?.gasLevel !== undefined && segment?.gasLevel >= 0 && (
                             <MetricCard
-                                label="Gas Level"
+                                label="Air Quality (MQ135)"
+                                value={segment.gasLevel}
+                                unit="PPM"
+                                icon="🍃"
+                                thresholds={getThresholdsForMetric('airQuality', name)}
+                            />
+                        )}
+
+                        {/* Kitchen: MQ135 Gas Breakdown - CO₂ */}
+                        {name === 'Kitchen' && segment?.gases?.co2 !== undefined && segment.gases.co2 > 0 && (
+                            <MetricCard
+                                label="CO₂ (MQ135)"
+                                value={segment.gases.co2}
+                                unit="ppm"
+                                icon="🌫️"
+                                thresholds={{ warning: 1000, critical: 2000 }}
+                            />
+                        )}
+
+                        {/* Kitchen: MQ135 Gas Breakdown - NH₃ */}
+                        {name === 'Kitchen' && segment?.gases?.nh3 !== undefined && segment.gases.nh3 > 0 && (
+                            <MetricCard
+                                label="NH₃ Ammonia"
+                                value={segment.gases.nh3}
+                                unit="ppm"
+                                icon="💨"
+                                thresholds={{ warning: 25, critical: 50 }}
+                            />
+                        )}
+
+                        {/* Kitchen: MQ135 Gas Breakdown - NOx */}
+                        {name === 'Kitchen' && segment?.gases?.nox !== undefined && segment.gases.nox > 0 && (
+                            <MetricCard
+                                label="NOx (Nitrogen Oxide)"
+                                value={segment.gases.nox}
+                                unit="ppm"
+                                icon="🔬"
+                                thresholds={{ warning: 50, critical: 100 }}
+                            />
+                        )}
+
+                        {/* Bedroom: MQ2 sensor (Gas/Smoke) */}
+                        {name === 'Bedroom' && segment?.gasLevel !== undefined && segment?.gasLevel >= 0 && (
+                            <MetricCard
+                                label="Gas Level (MQ2)"
                                 value={segment.gasLevel}
                                 unit="PPM"
                                 icon="💨"
@@ -308,14 +380,25 @@ function SmartBuildingMonitor() {
                             />
                         )}
 
-                        {/* Air Quality - Only for Kitchen (MQ135 sensor) */}
-                        {name === 'Kitchen' && segment?.airQuality !== undefined && segment?.airQuality >= 0 && (
+                        {/* Parking: MQ2 sensor (Gas/Smoke) */}
+                        {name === 'Parking' && segment?.gasLevel !== undefined && segment?.gasLevel >= 0 && (
                             <MetricCard
-                                label="Air Quality"
-                                value={segment.airQuality}
+                                label="Gas Level (MQ2)"
+                                value={segment.gasLevel}
                                 unit="PPM"
-                                icon="🍃"
-                                thresholds={getThresholdsForMetric('airQuality', name)}
+                                icon="💨"
+                                thresholds={getThresholdsForMetric('gas', name)}
+                            />
+                        )}
+
+                        {/* Central Gas: MQ2 sensor (Gas monitoring) */}
+                        {name === 'Central_Gas' && segment?.gasLevel !== undefined && segment?.gasLevel >= 0 && (
+                            <MetricCard
+                                label="Gas Level (MQ2)"
+                                value={segment.gasLevel}
+                                unit="PPM"
+                                icon="⛽"
+                                thresholds={getThresholdsForMetric('gas', name)}
                             />
                         )}
 
@@ -521,6 +604,80 @@ function SmartBuildingMonitor() {
                         <SegmentCard name="Bedroom" segment={segments.bedroom} icon="🛏️" gradient="from-indigo-500 to-purple-500" />
                         <SegmentCard name="Parking" segment={segments.parking} icon="🚗" gradient="from-gray-600 to-gray-700" />
                         <SegmentCard name="Central Gas" segment={segments.centralGas} icon="⚠️" gradient="from-yellow-500 to-orange-500" />
+                    </div>
+
+                    {/* Sensor Information Guide */}
+                    <div className="mt-6 bg-white/10 backdrop-blur-xl rounded-xl p-6 border border-white/20">
+                        <h3 className="text-xl font-bold text-white mb-4 flex items-center space-x-2">
+                            <span>📡</span>
+                            <span>Sensor Information</span>
+                        </h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                            {/* Kitchen Sensors */}
+                            <div className="bg-orange-500/20 border border-orange-400/50 rounded-lg p-4">
+                                <div className="flex items-center space-x-2 mb-2">
+                                    <span className="text-2xl">👨‍🍳</span>
+                                    <span className="text-white font-bold">Kitchen</span>
+                                </div>
+                                <ul className="text-sm text-white/90 space-y-1">
+                                    <li>🌡️ DHT11: Temperature & Humidity</li>
+                                    <li>🍃 MQ135: Air Quality</li>
+                                    <li className="text-xs pl-4">• CO₂, NH₃, NOx breakdown</li>
+                                    <li>🔥 Flame Sensor</li>
+                                    <li>🔔 Buzzer, 🚨 LEDs</li>
+                                </ul>
+                            </div>
+
+                            {/* Bedroom Sensors */}
+                            <div className="bg-indigo-500/20 border border-indigo-400/50 rounded-lg p-4">
+                                <div className="flex items-center space-x-2 mb-2">
+                                    <span className="text-2xl">🛏️</span>
+                                    <span className="text-white font-bold">Bedroom</span>
+                                </div>
+                                <ul className="text-sm text-white/90 space-y-1">
+                                    <li>🌡️ DS18B20: Temperature</li>
+                                    <li>💨 MQ2: Gas/Smoke</li>
+                                    <li>🔥 Flame Sensor</li>
+                                    <li>🔔 Buzzer, 🚨 LEDs</li>
+                                </ul>
+                            </div>
+
+                            {/* Parking Sensors */}
+                            <div className="bg-gray-600/20 border border-gray-500/50 rounded-lg p-4">
+                                <div className="flex items-center space-x-2 mb-2">
+                                    <span className="text-2xl">🚗</span>
+                                    <span className="text-white font-bold">Parking</span>
+                                </div>
+                                <ul className="text-sm text-white/90 space-y-1">
+                                    <li>💨 MQ2: Gas/Smoke</li>
+                                    <li>🔥 Flame Sensor</li>
+                                    <li>🚨 LEDs</li>
+                                    <li className="text-gray-400">No buzzer</li>
+                                </ul>
+                            </div>
+
+                            {/* Central Gas Sensors */}
+                            <div className="bg-yellow-500/20 border border-yellow-400/50 rounded-lg p-4">
+                                <div className="flex items-center space-x-2 mb-2">
+                                    <span className="text-2xl">⚠️</span>
+                                    <span className="text-white font-bold">Central Gas</span>
+                                </div>
+                                <ul className="text-sm text-white/90 space-y-1">
+                                    <li>⛽ MQ2: Gas Monitoring</li>
+                                    <li>🔔 Buzzer</li>
+                                    <li className="text-gray-400">No LEDs</li>
+                                    <li className="text-gray-400">No flame sensor</li>
+                                </ul>
+                            </div>
+                        </div>
+                        <div className="mt-4 pt-4 border-t border-white/20 text-xs text-blue-200 space-y-2">
+                            <p><strong>Gas Sensor Details:</strong></p>
+                            <ul className="list-disc list-inside space-y-1 pl-2">
+                                <li><strong>MQ135 (Kitchen):</strong> Measures air quality with breakdown of CO₂ (Carbon Dioxide), NH₃ (Ammonia), and NOx (Nitrogen Oxides)</li>
+                                <li><strong>MQ2 (Bedroom, Parking, Central):</strong> Detects combustible gases & smoke (LPG, Propane, Methane)</li>
+                            </ul>
+                            <p className="text-yellow-300 mt-2"><strong>⚠️ Note:</strong> Gas concentration values are estimates based on sensor calibration. For critical applications, professional calibration is recommended.</p>
+                        </div>
                     </div>
                 </div>
 

@@ -27,42 +27,43 @@
 // Kitchen Sensors
 #define DHT_PIN 22            // DHT11 for temperature/humidity
 #define DHT_TYPE DHT11
-#define MQ135_PIN A0          // Air quality sensor 
+#define MQ135_PIN A3          // Air quality sensor
 #define FLAME_KITCHEN 25      // Flame sensor
-#define BUZZER_KITCHEN 5      // Kitchen buzzer
-#define LED_GREEN_KITCHEN 31  // Kitchen safe indicator**
-#define LED_RED_KITCHEN 34    // Kitchen danger indicator**
+#define BUZZER_KITCHEN 5    // Kitchen buzzer
+#define LED_GREEN_KITCHEN 31  // Kitchen safe indicator
+#define LED_RED_KITCHEN 34    // Kitchen danger indicator
 
 // Bedroom Sensors  
-#define ONE_WIRE_BUS 23       // DS18B20 temperature sensor**
-#define MQ2_BEDROOM A1        // Gas/smoke sensor
+#define ONE_WIRE_BUS 23       // DS18B20 temperature sensor
+#define MQ2_BEDROOM A0        // Gas/smoke sensor
 #define FLAME_BEDROOM 24      // Flame sensor
 #define BUZZER_BEDROOM 4    // Bedroom buzzer
-#define LED_GREEN_BEDROOM 30  // Bedroom safe indicator**
-#define LED_RED_BEDROOM 33    // Bedroom danger indicator**
+#define LED_GREEN_BEDROOM 30  // Bedroom safe indicator
+#define LED_RED_BEDROOM 33    // Bedroom danger indicator
 
 // Parking Sensors
-#define MQ2_PARKING A3       // Gas/smoke sensor
+#define MQ2_PARKING A2        // Gas/smoke sensor
 #define FLAME_PARKING 26      // Flame sensor
-#define LED_GREEN_PARKING 32  // Parking safe indicator**
-#define LED_RED_PARKING 35    // Parking danger indicator**
+#define LED_GREEN_PARKING 32  // Parking safe indicator
+#define LED_RED_PARKING 35    // Parking danger indicator
 
 // Central Gas Chamber
-#define MQ2_CENTRAL A2       // Central gas monitoring
+#define MQ2_CENTRAL A1        // Central gas monitoring
 #define BUZZER_CENTRAL 3     // Central chamber buzzer
 
 // ========== SENSOR THRESHOLDS ==========
-#define MQ2_THRESHOLD 300      // Gas/Smoke threshold (analog)
-#define MQ135_THRESHOLD 400    // Air quality threshold (analog)
-#define TEMP_THRESHOLD_HIGH 35 // High temperature alert (°C)
-#define TEMP_THRESHOLD_LOW 10  // Low temperature alert (°C)
-#define HUMIDITY_HIGH 70       // High humidity alert (%)
-#define HUMIDITY_LOW 30        // Low humidity alert (%)
+// Based on normal room conditions (calibrated values)
+#define MQ2_THRESHOLD 350      // Gas/Smoke threshold (analog) - raised from 300
+#define MQ135_THRESHOLD 450    // Air quality threshold (analog) - raised from 400
+#define TEMP_THRESHOLD_HIGH 40 // High temperature alert (°C) - raised from 35
+#define TEMP_THRESHOLD_LOW -5  // Low temperature alert (°C) - lowered to ignore DS18B20 error
+#define HUMIDITY_HIGH 75       // High humidity alert (%) - raised from 70
+#define HUMIDITY_LOW 25        // Low humidity alert (%) - lowered from 30
 
 // Critical thresholds for immediate emergency
-#define MQ2_CRITICAL 500       // Critical gas level
-#define MQ135_CRITICAL 600     // Critical air quality
-#define TEMP_CRITICAL 45       // Critical temperature
+#define MQ2_CRITICAL 550       // Critical gas level - raised from 500
+#define MQ135_CRITICAL 650     // Critical air quality - raised from 600
+#define TEMP_CRITICAL 50       // Critical temperature - raised from 45
 
 // ========== SENSOR OBJECTS ==========
 DHT dht(DHT_PIN, DHT_TYPE);
@@ -103,6 +104,10 @@ const unsigned long SENSOR_INTERVAL = 1000;  // Read sensors every 1 second
 const unsigned long SEND_INTERVAL = 3000;    // Send data every 3 seconds
 const unsigned long HEARTBEAT_INTERVAL = 10000; // Send heartbeat every 10 seconds
 const unsigned long ALERT_DEBOUNCE = 5000;   // 5 second debounce for alerts
+
+// ========== CHUNKED TRANSMISSION CONFIGURATION ==========
+const int MAX_CHUNK_SIZE = 200;  // Maximum bytes per chunk
+int currentChunkSequence = 0;     // Sequence number for chunks
 
 void setup() {
   Serial.begin(115200);  // For debugging
@@ -315,17 +320,31 @@ void controlAlertsAndLEDs() {
   
   // Kitchen alerts and LEDs
   if (kitchen.isDangerous) {
+    // Turn on RED LED immediately
     digitalWrite(LED_RED_KITCHEN, HIGH);
     digitalWrite(LED_GREEN_KITCHEN, LOW);
     
-    if (kitchen.isEmergency && (currentTime - kitchen.lastAlert > ALERT_DEBOUNCE)) {
-      tone(BUZZER_KITCHEN, 2000, 500); // High pitch for emergency
-      kitchen.lastAlert = currentTime;
-    } else if (!kitchen.isEmergency && (currentTime - kitchen.lastAlert > ALERT_DEBOUNCE * 2)) {
-      tone(BUZZER_KITCHEN, 1000, 200); // Lower pitch for warning
-      kitchen.lastAlert = currentTime;
+    if (kitchen.isEmergency) {
+      // FIRE/EMERGENCY: Continuous loud buzzer
+      if (kitchen.flameDetected) {
+        // FIRE DETECTED: Rapid alternating beeps
+        if ((currentTime / 300) % 2 == 0) { // Toggle every 300ms
+          tone(BUZZER_KITCHEN, 2500); // Very high pitch for fire
+        } else {
+          tone(BUZZER_KITCHEN, 2000);
+        }
+      } else {
+        // Other emergency (high temp/gas): Continuous high tone
+        tone(BUZZER_KITCHEN, 2000);
+      }
+    } else {
+      // WARNING: Intermittent beeps
+      if ((currentTime / 1000) % 3 == 0) { // Beep once every 3 seconds
+        tone(BUZZER_KITCHEN, 1000, 200);
+      }
     }
   } else {
+    // Safe: Green LED on, buzzer off
     digitalWrite(LED_RED_KITCHEN, LOW);
     digitalWrite(LED_GREEN_KITCHEN, HIGH);
     noTone(BUZZER_KITCHEN);
@@ -333,17 +352,31 @@ void controlAlertsAndLEDs() {
   
   // Bedroom alerts and LEDs
   if (bedroom.isDangerous) {
+    // Turn on RED LED immediately
     digitalWrite(LED_RED_BEDROOM, HIGH);
     digitalWrite(LED_GREEN_BEDROOM, LOW);
     
-    if (bedroom.isEmergency && (currentTime - bedroom.lastAlert > ALERT_DEBOUNCE)) {
-      tone(BUZZER_BEDROOM, 2200, 500); // Distinct pitch from kitchen
-      bedroom.lastAlert = currentTime;
-    } else if (!bedroom.isEmergency && (currentTime - bedroom.lastAlert > ALERT_DEBOUNCE * 2)) {
-      tone(BUZZER_BEDROOM, 1200, 200);
-      bedroom.lastAlert = currentTime;
+    if (bedroom.isEmergency) {
+      // FIRE/EMERGENCY: Continuous loud buzzer
+      if (bedroom.flameDetected) {
+        // FIRE DETECTED: Rapid alternating beeps
+        if ((currentTime / 300) % 2 == 0) { // Toggle every 300ms
+          tone(BUZZER_BEDROOM, 2700); // Very high pitch for fire
+        } else {
+          tone(BUZZER_BEDROOM, 2200);
+        }
+      } else {
+        // Other emergency (high temp/gas): Continuous high tone
+        tone(BUZZER_BEDROOM, 2200);
+      }
+    } else {
+      // WARNING: Intermittent beeps
+      if ((currentTime / 1000) % 3 == 0) { // Beep once every 3 seconds
+        tone(BUZZER_BEDROOM, 1200, 200);
+      }
     }
   } else {
+    // Safe: Green LED on, buzzer off
     digitalWrite(LED_RED_BEDROOM, LOW);
     digitalWrite(LED_GREEN_BEDROOM, HIGH);
     noTone(BUZZER_BEDROOM);
@@ -351,100 +384,173 @@ void controlAlertsAndLEDs() {
   
   // Parking LEDs (no buzzer)
   if (parking.isDangerous) {
+    // Turn on RED LED immediately
     digitalWrite(LED_RED_PARKING, HIGH);
     digitalWrite(LED_GREEN_PARKING, LOW);
   } else {
+    // Safe: Green LED on
     digitalWrite(LED_RED_PARKING, LOW);
     digitalWrite(LED_GREEN_PARKING, HIGH);
   }
   
   // Central Gas Chamber buzzer (no LEDs)
-  if (centralGas.isDangerous) {
-    if (centralGas.isEmergency && (currentTime - centralGas.lastAlert > ALERT_DEBOUNCE)) {
-      tone(BUZZER_CENTRAL, 2500, 700); // Highest pitch for gas emergency
-      centralGas.lastAlert = currentTime;
-    } else if (!centralGas.isEmergency && (currentTime - centralGas.lastAlert > ALERT_DEBOUNCE * 2)) {
-      tone(BUZZER_CENTRAL, 1500, 300);
-      centralGas.lastAlert = currentTime;
+  // Sound alarm for central gas issues OR if fire detected in parking (since parking has no buzzer)
+  if (centralGas.isDangerous || parking.flameDetected) {
+    if (parking.flameDetected) {
+      // PARKING FIRE DETECTED: Rapid alternating beeps (parking has no buzzer, so use central)
+      if ((currentTime / 300) % 2 == 0) { // Toggle every 300ms
+        tone(BUZZER_CENTRAL, 3000); // Highest pitch for fire
+      } else {
+        tone(BUZZER_CENTRAL, 2500);
+      }
+    } else if (centralGas.isEmergency) {
+      // GAS EMERGENCY: Continuous very high pitch
+      tone(BUZZER_CENTRAL, 2800);
+    } else {
+      // WARNING: Intermittent beeps
+      if ((currentTime / 1000) % 3 == 0) { // Beep once every 3 seconds
+        tone(BUZZER_CENTRAL, 1500, 300);
+      }
     }
   } else {
+    // Safe: Buzzer off
     noTone(BUZZER_CENTRAL);
   }
 }
 
-// Send comprehensive JSON data to ESP32
+// Send comprehensive JSON data to ESP32 in chunks
 void sendDataToESP32() {
-  StaticJsonDocument<2048> doc;  // Increased from 1024 to 2048 bytes to accommodate all 4 segments + thresholds
+  // Send data in 4 separate chunks to avoid buffer overflow
+  sendSystemChunk();
+  delay(50); // Small delay between chunks
   
-  // System-wide information
-  doc["systemEmergency"] = systemEmergency;
-  doc["timestamp"] = millis();
-  doc["emergencyDuration"] = (emergencyStartTime > 0) ? (millis() - emergencyStartTime) : 0;
+  sendKitchenChunk();
+  delay(50);
   
-  // Global environmental data
-  JsonObject env = doc.createNestedObject("environment");
-  env["globalTemperature"] = globalTemperature;
-  env["globalHumidity"] = globalHumidity;
+  sendBedroomChunk();
+  delay(50);
   
-  // Kitchen data (DHT11 + MQ135 + Flame + Buzzer + LEDs)
-  JsonObject kit = doc.createNestedObject("kitchen");
-  kit["temperature"] = kitchen.temperature;
-  kit["humidity"] = kitchen.humidity;
-  kit["airQuality"] = kitchen.airQuality;
-  kit["flameDetected"] = kitchen.flameDetected;
-  kit["gasLevel"] = kitchen.gasLevel; // Using airQuality as gas reference
-  kit["isEmergency"] = kitchen.isEmergency;
-  kit["isDangerous"] = kitchen.isDangerous;
-  kit["sensorTypes"] = "DHT11,MQ135,Flame";
-  kit["hasComponents"] = "Buzzer,LEDs";
+  sendParkingAndCentralChunk();
+  delay(50);
   
-  // Bedroom data (DS18B20 + MQ2 + Flame + Buzzer + LEDs)
-  JsonObject bed = doc.createNestedObject("bedroom");
-  bed["temperature"] = bedroom.temperature;
-  bed["gasLevel"] = bedroom.gasLevel;
-  bed["flameDetected"] = bedroom.flameDetected;
-  bed["isEmergency"] = bedroom.isEmergency;
-  bed["isDangerous"] = bedroom.isDangerous;
-  bed["sensorTypes"] = "DS18B20,MQ2,Flame";
-  bed["hasComponents"] = "Buzzer,LEDs";
-  
-  // Parking data (MQ2 + Flame + LEDs)
-  JsonObject park = doc.createNestedObject("parking");
-  park["gasLevel"] = parking.gasLevel;
-  park["flameDetected"] = parking.flameDetected;
-  park["isEmergency"] = parking.isEmergency;
-  park["isDangerous"] = parking.isDangerous;
-  park["sensorTypes"] = "MQ2,Flame";
-  park["hasComponents"] = "LEDs";
-  
-  // Central Gas Chamber data (MQ2 + Buzzer)
-  JsonObject central = doc.createNestedObject("centralGas");
-  central["gasLevel"] = centralGas.gasLevel;
-  central["isEmergency"] = centralGas.isEmergency;
-  central["isDangerous"] = centralGas.isDangerous;
-  central["sensorTypes"] = "MQ2";
-  central["hasComponents"] = "Buzzer";
-  
-  // Critical thresholds for ESP32 reference
-  JsonObject thresholds = doc.createNestedObject("thresholds");
-  thresholds["mq2_warning"] = MQ2_THRESHOLD;
-  thresholds["mq2_critical"] = MQ2_CRITICAL;
-  thresholds["mq135_warning"] = MQ135_THRESHOLD;
-  thresholds["mq135_critical"] = MQ135_CRITICAL;
-  thresholds["temp_high"] = TEMP_THRESHOLD_HIGH;
-  thresholds["temp_critical"] = TEMP_CRITICAL;
-  
-  // Serialize and send JSON data to Serial1 for ESP32
-  Serial1.print("DATA:");
-  serializeJson(doc, Serial1);
-  Serial1.println(); // newline as message delimiter
-  
-  // Also send to Serial for debugging (optional)
-  Serial.print("DEBUG_DATA:");
-  serializeJson(doc, Serial);
-  Serial.println();
+  // Send completion signal
+  sendDataCompleteSignal();
   
   dataSendCount++;
+}
+
+// Chunk 1: System and Environment data
+void sendSystemChunk() {
+  StaticJsonDocument<256> doc;
+  
+  doc["chunkType"] = "SYSTEM";
+  doc["sequence"] = currentChunkSequence++;
+  doc["timestamp"] = millis();
+  doc["systemEmergency"] = systemEmergency;
+  doc["emergencyDuration"] = (emergencyStartTime > 0) ? (millis() - emergencyStartTime) : 0;
+  doc["globalTemp"] = globalTemperature;
+  doc["globalHumidity"] = globalHumidity;
+  
+  Serial1.print("CHUNK:");
+  serializeJson(doc, Serial1);
+  Serial1.println();
+  
+  Serial.print("Sent SYSTEM chunk: ");
+  serializeJson(doc, Serial);
+  Serial.println();
+}
+
+// Chunk 2: Kitchen data
+void sendKitchenChunk() {
+  StaticJsonDocument<256> doc;
+  
+  doc["chunkType"] = "KITCHEN";
+  doc["sequence"] = currentChunkSequence++;
+  doc["temp"] = kitchen.temperature;
+  doc["humidity"] = kitchen.humidity;
+  doc["airQuality"] = kitchen.airQuality;
+  doc["gasLevel"] = kitchen.gasLevel;
+  doc["flame"] = kitchen.flameDetected;
+  doc["emergency"] = kitchen.isEmergency;
+  doc["dangerous"] = kitchen.isDangerous;
+  doc["sensors"] = "DHT11,MQ135,Flame";
+  doc["components"] = "Buzzer,LEDs";
+  
+  Serial1.print("CHUNK:");
+  serializeJson(doc, Serial1);
+  Serial1.println();
+  
+  Serial.print("Sent KITCHEN chunk: ");
+  serializeJson(doc, Serial);
+  Serial.println();
+}
+
+// Chunk 3: Bedroom data
+void sendBedroomChunk() {
+  StaticJsonDocument<256> doc;
+  
+  doc["chunkType"] = "BEDROOM";
+  doc["sequence"] = currentChunkSequence++;
+  doc["temp"] = bedroom.temperature;
+  doc["gasLevel"] = bedroom.gasLevel;
+  doc["flame"] = bedroom.flameDetected;
+  doc["emergency"] = bedroom.isEmergency;
+  doc["dangerous"] = bedroom.isDangerous;
+  doc["sensors"] = "DS18B20,MQ2,Flame";
+  doc["components"] = "Buzzer,LEDs";
+  
+  Serial1.print("CHUNK:");
+  serializeJson(doc, Serial1);
+  Serial1.println();
+  
+  Serial.print("Sent BEDROOM chunk: ");
+  serializeJson(doc, Serial);
+  Serial.println();
+}
+
+// Chunk 4: Parking and Central Gas data
+void sendParkingAndCentralChunk() {
+  StaticJsonDocument<256> doc;
+  
+  doc["chunkType"] = "PARKING_CENTRAL";
+  doc["sequence"] = currentChunkSequence++;
+  
+  // Parking data
+  JsonObject parking_data = doc.createNestedObject("parking");
+  parking_data["gasLevel"] = parking.gasLevel;
+  parking_data["flame"] = parking.flameDetected;
+  parking_data["emergency"] = parking.isEmergency;
+  parking_data["dangerous"] = parking.isDangerous;
+  
+  // Central Gas data
+  JsonObject central_data = doc.createNestedObject("central");
+  central_data["gasLevel"] = centralGas.gasLevel;
+  central_data["emergency"] = centralGas.isEmergency;
+  central_data["dangerous"] = centralGas.isDangerous;
+  
+  Serial1.print("CHUNK:");
+  serializeJson(doc, Serial1);
+  Serial1.println();
+  
+  Serial.print("Sent PARKING_CENTRAL chunk: ");
+  serializeJson(doc, Serial);
+  Serial.println();
+}
+
+// Send data completion signal
+void sendDataCompleteSignal() {
+  StaticJsonDocument<128> doc;
+  
+  doc["chunkType"] = "COMPLETE";
+  doc["sequence"] = currentChunkSequence++;
+  doc["totalChunks"] = 4;
+  doc["dataPacketId"] = dataSendCount;
+  
+  Serial1.print("CHUNK:");
+  serializeJson(doc, Serial1);
+  Serial1.println();
+  
+  Serial.println("Data transmission complete");
 }
 
 // Print detailed system status to Serial (for debugging)

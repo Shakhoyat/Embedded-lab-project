@@ -1,8 +1,8 @@
-import SmartBuildingMonitor from './components/SmartBuildingMonitor'
+import EnhancedSmartBuildingMonitor from './components/EnhancedSmartBuildingMonitor'
 import './App.css'
 
 function App() {
-  return <SmartBuildingMonitor />
+  return <EnhancedSmartBuildingMonitor />
 }
 
 export default App
